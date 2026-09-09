@@ -481,7 +481,7 @@
     pillEl.addEventListener("pointerup", end);
     pillEl.addEventListener("pointercancel", end);
     pillEl.addEventListener("click", (e) => {
-      if (!e.isTrusted || suppressClick) return;
+      if (!e.isTrusted || suppressClick || e.target.closest("button")) return; // buttons handle their own clicks
       if (host.hasAttribute("data-collapsed")) setCollapsed(false);
     });
   }
@@ -639,6 +639,7 @@
     pump();
   }
 
-  window.__gptBurmese = { run, toggle, stop, setAuto, setCollapsed, setCorner, store, state, queue };
+  const buttonRects = () => Object.fromEntries([...(shadow?.querySelectorAll("button") || [])].map((b) => [b.className, b.getBoundingClientRect().toJSON()]));
+  window.__gptBurmese = { run, toggle, stop, setAuto, setCollapsed, setCorner, buttonRects, store, state, queue };
   run();
 })();
