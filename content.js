@@ -1,15 +1,17 @@
-// In-place translator. Injected on demand by background.js (context menu,
-// shortcut, side panel button, or auto mode on a listed site).
+// In-place translator. Injected into every frame on demand by background.js
+// (context menu, shortcut, side panel button, or auto mode on a listed site).
 //
 // Only text near the viewport is sent: each candidate text node's parent is
 // watched by an IntersectionObserver with one screen of look-ahead, and nodes
-// are queued as their element comes near. A MutationObserver picks up text
-// that appears or changes later (next lesson in a single-page app, expanded
-// sections, live counters). Running the script again resumes after
-// "Show original" or the × button.
+// are queued as their element comes near. Translations stream back over a
+// port and are written as they arrive. A MutationObserver picks up text that
+// appears or changes later (next lesson in a single-page app, expanded
+// sections, live counters). Open shadow roots are walked and observed too.
+// Only the top frame shows the pill; frames follow its Show original toggle.
 (() => {
   const HOST_ID = "gpt-burmese-host";
   const MARK = "data-gpt-burmese"; // set on the parent of a translated text node
+  const IS_TOP = window === window.top;
 
   if (window.__gptBurmese) {
     window.__gptBurmese.run();
@@ -46,10 +48,11 @@
   const seen = new WeakSet();     // Text nodes already picked up
   const pendingEls = new Map();   // Element -> Set<Text> waiting for the element to come near
   const deferred = new Set();     // near but invisible (opacity 0, visibility hidden); re-checked later
+  const observedRoots = new WeakSet(); // shadow roots the MutationObserver already watches
   const queue = [];               // Text nodes near the viewport, waiting to be sent
   const state = {
     showing: "my", active: 0, waiting: 0, translated: 0, cached: 0, sentChars: 0,
-    fatal: null, retryAt: 0, stopped: false, auto: false,
+    fatal: null, notice: null, retryAt: 0, stopped: false, auto: false,
   };
   let host, shadow, msgEl, dotEl, toggleBtn, autoBtn, io, mo, observeTimer, observeDeadline = 0, retryTimer;
 
@@ -65,19 +68,37 @@
     return true;
   }
 
-  function collect() {
-    const out = [];
-    if (!document.body) return out;
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+  // Walks a document or shadow root; descends into open shadow roots it meets.
+  function collectFrom(root, out) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (node.matches(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT; // prune the subtree
+          if (node.shadowRoot) {
+            watchRoot(node.shadowRoot);
+            collectFrom(node.shadowRoot, out);
+          }
+          return NodeFilter.FILTER_SKIP;
+        }
         const p = node.parentElement;
-        if (!p || seen.has(node) || p.hasAttribute(MARK) || p.closest(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
+        if (!p || seen.has(node) || p.hasAttribute(MARK)) return NodeFilter.FILTER_REJECT;
         return isTranslatable(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
     let n;
     while ((n = walker.nextNode())) out.push(n);
+  }
+
+  function collect() {
+    const out = [];
+    if (document.body) collectFrom(document.body, out);
     return out;
+  }
+
+  function watchRoot(root) {
+    if (!mo || observedRoots.has(root)) return;
+    observedRoots.add(root);
+    mo.observe(root, { childList: true, subtree: true, characterData: true });
   }
 
   const isVisible = (node) => {
@@ -228,29 +249,82 @@
     return batch;
   }
 
-  async function request(fragments) {
-    let reply;
-    try {
-      reply = await chrome.runtime.sendMessage({ type: "translate-fragments", fragments, title: document.title });
-    } catch (err) {
-      const msg = err?.message || String(err);
-      if (/context invalidated/i.test(msg)) throw Object.assign(new Error("The extension was reloaded — run Translate again."), { retryable: false });
-      throw Object.assign(new Error(msg), { retryable: true, retryAfter: 5000 }); // worker asleep or restarting
-    }
-    if (!reply?.ok) {
-      throw Object.assign(new Error(reply?.error || "Translation failed."), {
-        retryable: !!reply?.retryable,
-        retryAfter: reply?.retryAfter || 0,
+  // One port per batch; partial results arrive as the model produces them.
+  function request(fragments, onPartial) {
+    return new Promise((resolve, reject) => {
+      const wrap = (message, retryable, retryAfter = 5000) => Object.assign(new Error(message), { retryable, retryAfter });
+      let port;
+      try {
+        port = chrome.runtime.connect({ name: "translate" });
+      } catch (err) {
+        const msg = err?.message || String(err);
+        return reject(/context invalidated/i.test(msg) ? wrap("The extension was reloaded — run Translate again.", false) : wrap(msg, true));
+      }
+      let settled = false;
+      port.onMessage.addListener((m) => {
+        if (m?.type === "partial") onPartial(m.i, m.text);
+        else if (m?.type === "done") {
+          settled = true;
+          resolve(m);
+        } else if (m?.type === "error") {
+          settled = true;
+          reject(wrap(m.error || "Translation failed.", !!m.retryable, m.retryAfter || 5000));
+        }
       });
+      port.onDisconnect.addListener(() => {
+        if (settled) return;
+        const msg = chrome.runtime.lastError?.message || "The extension stopped responding.";
+        reject(/context invalidated/i.test(msg) ? wrap("The extension was reloaded — run Translate again.", false) : wrap(msg, true));
+      });
+      port.postMessage({ type: "translate", fragments, title: document.title });
+    });
+  }
+
+  function writeTranslation(e, t) {
+    const rec = { orig: e.orig, my: e.lead + t + e.trail };
+    if (!store.has(e.node)) state.translated++;
+    store.set(e.node, rec);
+    if (state.showing === "my") {
+      e.node.nodeValue = rec.my;
+      e.node.parentElement?.setAttribute(MARK, "1");
     }
-    state.cached += reply.cached || 0;
-    return reply.translations;
+  }
+
+  function revert(entries) {
+    for (const e of entries) {
+      const rec = store.get(e.node);
+      if (!rec) continue;
+      store.delete(e.node);
+      state.translated--;
+      if (e.node.nodeValue === rec.my) e.node.nodeValue = e.orig;
+      e.node.parentElement?.removeAttribute(MARK);
+    }
   }
 
   // Length mismatch = the model merged or dropped a fragment; halve twice, then give up on those.
   async function translateBatch(entries, depth = 0) {
-    const out = await request(entries.map((e) => e.core));
-    if (!Array.isArray(out) || out.length !== entries.length) {
+    const applied = new Set();
+    const apply = (i, text) => {
+      const e = entries[i];
+      const t = (text || "").trim();
+      if (!e || !t) return;
+      if (!applied.has(e) && e.node.nodeValue !== e.orig) {
+        seen.delete(e.node); // the page changed it meanwhile; collect() will pick it up again
+        return;
+      }
+      writeTranslation(e, t);
+      applied.add(e);
+    };
+    let res;
+    try {
+      res = await request(entries.map((e) => e.core), apply);
+    } catch (err) {
+      revert(applied);
+      throw err;
+    }
+    state.cached += res.cached || 0;
+    if (res.mismatch) {
+      revert(applied);
       if (entries.length > 1 && depth < 2) {
         const mid = Math.ceil(entries.length / 2);
         await Promise.all([translateBatch(entries.slice(0, mid), depth + 1), translateBatch(entries.slice(mid), depth + 1)]);
@@ -259,21 +333,7 @@
       }
       return;
     }
-    entries.forEach((e, i) => {
-      if (e.node.nodeValue !== e.orig) {
-        seen.delete(e.node); // the page changed it meanwhile; collect() will pick it up again
-        return;
-      }
-      const t = (out[i] || "").trim();
-      const rec = { orig: e.orig, my: t ? e.lead + t + e.trail : e.orig };
-      store.set(e.node, rec);
-      if (!t) return;
-      state.translated++;
-      if (state.showing === "my") {
-        e.node.nodeValue = rec.my;
-        e.node.parentElement?.setAttribute(MARK, "1");
-      }
-    });
+    for (const e of entries) if (!applied.has(e) && !store.has(e.node)) store.set(e.node, { orig: e.orig, my: e.orig }); // empty answer: leave it
   }
 
   function pump() {
@@ -320,10 +380,10 @@
     }
   }
 
-  // ---- pill
+  // ---- pill (top frame only)
 
   function ensurePill() {
-    if (host && host.isConnected) return;
+    if (!IS_TOP || (host && host.isConnected)) return;
     host = document.createElement("div");
     host.id = HOST_ID;
     host.setAttribute("translate", "no");
@@ -379,6 +439,9 @@
     if (state.fatal) {
       text = state.fatal;
       kind = "error";
+    } else if (state.notice) {
+      text = state.notice;
+      kind = "idle";
     } else if (state.showing === "orig") {
       text = `Original shown · ${count} translated`;
       kind = "idle";
@@ -413,10 +476,15 @@
       : `Translate every page on ${SITE} automatically as it loads.`;
   }
 
-  function toggle() {
-    state.showing = state.showing === "my" ? "orig" : "my";
+  function setShowing(showing) {
+    state.showing = showing;
     applyAll();
     pump();
+  }
+
+  function toggle() {
+    setShowing(state.showing === "my" ? "orig" : "my");
+    if (IS_TOP) chrome.runtime.sendMessage({ type: "frames-showing", showing: state.showing }).catch(() => {});
   }
 
   function stop() {
@@ -424,23 +492,34 @@
     host?.remove();
   }
 
-  // Per-site auto mode lives in chrome.storage.local.autoSites; background.js
-  // injects this script on every completed page load for listed sites.
+  // Per-site auto mode is decided by background.js (it holds the site list and
+  // the optional host permission). Turning it on needs that permission; the
+  // click's gesture usually carries through, otherwise the settings page opens.
   async function readAuto() {
-    if (!chrome.storage?.local) return;
-    const { autoSites = [] } = await chrome.storage.local.get("autoSites");
-    state.auto = autoSites.includes(SITE);
+    if (!IS_TOP) return;
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "auto-get" });
+      state.auto = !!r?.on;
+    } catch {}
     render();
   }
 
   async function setAuto(on) {
-    if (!chrome.storage?.local) return;
-    const { autoSites = [] } = await chrome.storage.local.get("autoSites");
-    const next = on ? [...new Set([...autoSites, SITE])] : autoSites.filter((h) => h !== SITE);
-    await chrome.storage.local.set({ autoSites: next });
-    state.auto = on;
+    let r;
+    try {
+      r = await chrome.runtime.sendMessage({ type: "auto-set", on });
+    } catch {
+      return;
+    }
+    state.auto = !!r?.on;
+    state.notice = r?.needsOptions ? "Finish turning Auto on in the settings tab that just opened." : null;
     render();
+    if (state.notice) setTimeout(() => { state.notice = null; render(); }, 8000);
   }
+
+  chrome.runtime.onMessage.addListener((m) => {
+    if (m?.type === "set-showing" && !IS_TOP && (m.showing === "my" || m.showing === "orig")) setShowing(m.showing);
+  });
 
   function run() {
     state.stopped = false;

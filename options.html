@@ -27,7 +27,12 @@
   <span id="savedMsg" class="saved" hidden>Saved.</span>
 
   <h2>Auto-translate sites</h2>
-  <p class="hint">Pages on these sites translate on their own as they load. Turn a site on or off from the pill on any of its pages, or remove it here.</p>
+  <p class="hint">Pages on these sites translate on their own as they load. Add a site (<code>freecodecamp.org</code>) or just one section of it (<code>freecodecamp.org/learn</code>). Chrome asks once for permission to read pages on that site.</p>
+  <div class="row">
+    <input id="autoEntry" type="text" placeholder="site.com or site.com/section" autocomplete="off" spellcheck="false" />
+    <button id="autoAddBtn">Add</button>
+  </div>
+  <p id="autoMsg" class="hint" hidden></p>
   <ul id="autoSites" class="sites"></ul>
 
   <h2>Translation cache</h2>
