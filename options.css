@@ -129,3 +129,8 @@ button.secondary {
   padding: 1px 4px;
   border-radius: 3px;
 }
+
+.sites li > span:last-child {
+  display: flex;
+  gap: 6px;
+}

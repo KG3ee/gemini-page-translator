@@ -52,7 +52,7 @@
   const queue = [];               // Text nodes near the viewport, waiting to be sent
   const state = {
     showing: "my", active: 0, waiting: 0, translated: 0, cached: 0, sentChars: 0,
-    fatal: null, notice: null, retryAt: 0, stopped: false, auto: false,
+    fatal: null, notice: null, retryAt: 0, stopped: false, auto: false, autoNeedsGrant: false,
   };
   let host, shadow, msgEl, dotEl, toggleBtn, autoBtn, io, mo, observeTimer, observeDeadline = 0, retryTimer;
 
@@ -424,7 +424,7 @@
     autoBtn = shadow.querySelector(".auto");
     // only real clicks count: a page cannot toggle anything with synthetic events
     toggleBtn.addEventListener("click", (e) => e.isTrusted && toggle());
-    autoBtn.addEventListener("click", (e) => e.isTrusted && setAuto(!state.auto));
+    autoBtn.addEventListener("click", (e) => e.isTrusted && setAuto(state.autoNeedsGrant || !state.auto));
     shadow.querySelector(".close").addEventListener("click", (e) => e.isTrusted && stop());
     document.documentElement.appendChild(host);
   }
@@ -469,11 +469,17 @@
     dotEl.className = `dot ${kind}`;
     toggleBtn.textContent = state.showing === "my" ? "Show original" : "Show Burmese";
     toggleBtn.hidden = n === 0;
-    autoBtn.textContent = state.auto ? "Auto: on" : "Auto on this site";
-    autoBtn.className = state.auto ? "auto on" : "auto";
-    autoBtn.title = state.auto
-      ? `Every page on ${SITE} translates as it loads. Click to turn that off.`
-      : `Translate every page on ${SITE} automatically as it loads.`;
+    if (state.autoNeedsGrant) {
+      autoBtn.textContent = "Auto: allow site access";
+      autoBtn.className = "auto";
+      autoBtn.title = `${SITE} is on your auto list but Chrome no longer holds permission for it. Click to allow it again.`;
+    } else {
+      autoBtn.textContent = state.auto ? "Auto: on" : "Auto on this site";
+      autoBtn.className = state.auto ? "auto on" : "auto";
+      autoBtn.title = state.auto
+        ? `Every page on ${SITE} translates as it loads. Click to turn that off.`
+        : `Translate every page on ${SITE} automatically as it loads.`;
+    }
   }
 
   function setShowing(showing) {
@@ -500,6 +506,7 @@
     try {
       const r = await chrome.runtime.sendMessage({ type: "auto-get" });
       state.auto = !!r?.on;
+      state.autoNeedsGrant = !!r?.listed && !r?.granted;
     } catch {}
     render();
   }
@@ -512,6 +519,7 @@
       return;
     }
     state.auto = !!r?.on;
+    state.autoNeedsGrant = false;
     state.notice = r?.needsOptions ? "Finish turning Auto on in the settings tab that just opened." : null;
     render();
     if (state.notice) setTimeout(() => { state.notice = null; render(); }, 8000);

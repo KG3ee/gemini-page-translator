@@ -81,6 +81,20 @@ async function renderAutoSites() {
     const li = document.createElement("li");
     const name = document.createElement("span");
     name.textContent = entry;
+    const actions = document.createElement("span");
+    const e = parseEntry(entry);
+    const granted = e ? await chrome.permissions.contains({ origins: originsFor(e.host) }) : true;
+    if (!granted) {
+      const allow = document.createElement("button");
+      allow.textContent = "Allow";
+      allow.title = "Chrome no longer holds permission for this site; click to allow it again.";
+      allow.addEventListener("click", async () => {
+        await chrome.permissions.request({ origins: originsFor(e.host) }); // this click's gesture
+        renderAutoSites();
+      });
+      name.textContent += " — needs permission";
+      actions.appendChild(allow);
+    }
     const btn = document.createElement("button");
     btn.textContent = "Remove";
     btn.className = "secondary";
@@ -88,7 +102,8 @@ async function renderAutoSites() {
       await chrome.runtime.sendMessage({ type: "auto-remove", entry });
       renderAutoSites();
     });
-    li.append(name, btn);
+    actions.appendChild(btn);
+    li.append(name, actions);
     autoSitesEl.appendChild(li);
   }
 }

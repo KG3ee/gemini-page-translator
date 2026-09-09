@@ -41,8 +41,11 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 // Versions before 1.6 required access to every site; Chrome keeps such grants
-// across an update, so give them back explicitly. Per-site grants stay.
-// Runs on install, on browser start, and on every worker start.
+// across an update, so give them back explicitly. Runs on install, on browser
+// start, and on every worker start. Note Chrome's semantics: removing a
+// wildcard host also drops every narrower grant it covers, so a site switched
+// on under v1.6.0 loses its permission here once; the pill and the settings
+// page then offer to allow it again (auto-get reports listed but not granted).
 async function dropAllSitesGrant() {
   const origins = ["http://*/*", "https://*/*"];
   if (await chrome.permissions.contains({ origins })) await chrome.permissions.remove({ origins });
@@ -164,7 +167,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return; // only our own content scripts and pages
   switch (msg?.type) {
     case "auto-get": {
-      autoList().then((list) => sendResponse({ on: matchesAuto(sender.url || "", list) }));
+      // "on" needs both: the site is listed AND Chrome still holds its permission.
+      const host = siteOf(sender.url || "");
+      Promise.all([autoList(), host ? chrome.permissions.contains({ origins: originsFor(host) }) : false])
+        .then(([list, granted]) => {
+          const listed = matchesAuto(sender.url || "", list);
+          sendResponse({ on: listed && granted, listed, granted });
+        });
       return true;
     }
     case "auto-set": {
