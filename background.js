@@ -33,8 +33,21 @@ function installMenu() {
 chrome.runtime.onInstalled.addListener(() => {
   installMenu();
   purgeLegacyCache().catch(() => {});
+  dropAllSitesGrant().catch(() => {});
 });
-chrome.runtime.onStartup.addListener(installMenu);
+chrome.runtime.onStartup.addListener(() => {
+  installMenu();
+  dropAllSitesGrant().catch(() => {});
+});
+
+// Versions before 1.6 required access to every site; Chrome keeps such grants
+// across an update, so give them back explicitly. Per-site grants stay.
+// Runs on install, on browser start, and on every worker start.
+async function dropAllSitesGrant() {
+  const origins = ["http://*/*", "https://*/*"];
+  if (await chrome.permissions.contains({ origins })) await chrome.permissions.remove({ origins });
+}
+dropAllSitesGrant().catch(() => {});
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_ID && tab?.id) translateTab(tab.id);
