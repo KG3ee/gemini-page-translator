@@ -29,8 +29,10 @@
     "textarea", "input", "select", "option", "svg", "math", "iframe", "object", "canvas", "video", "audio",
     // site chrome the reader is not reading
     "nav", "footer", "[role='navigation']", "[role='contentinfo']", "[role='banner']",
-    // hidden, assistive-only, icon fonts
-    "[hidden]", "[aria-hidden='true']", ".sr-only", ".visually-hidden", ".material-icons", "[class*='material-symbols']",
+    // hidden, assistive-only, icon fonts (aria-hidden is NOT here: sites mark
+    // visible text aria-hidden when a screen-reader copy exists elsewhere, e.g.
+    // 16personalities' questions; real invisibility is checked at send time)
+    "[hidden]", ".sr-only", ".visually-hidden", ".material-icons", "[class*='material-symbols']",
     // explicit opt-outs
     "[translate='no']", ".notranslate", "[contenteditable='']", "[contenteditable='true']", "[contenteditable='plaintext-only']",
     `#${HOST_ID}`,
