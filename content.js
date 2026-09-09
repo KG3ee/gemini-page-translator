@@ -54,7 +54,8 @@
     showing: "my", active: 0, waiting: 0, translated: 0, cached: 0, sentChars: 0,
     fatal: null, notice: null, retryAt: 0, stopped: false, auto: false, autoNeedsGrant: false,
   };
-  let host, shadow, msgEl, dotEl, toggleBtn, autoBtn, io, mo, observeTimer, observeDeadline = 0, retryTimer;
+  const pillPrefs = { corner: "br", collapsed: false }; // remembered across pages
+  let host, shadow, pillEl, msgEl, dotEl, toggleBtn, autoBtn, io, mo, observeTimer, observeDeadline = 0, retryTimer;
 
   // ---- what to translate
 
@@ -390,11 +391,21 @@
     shadow = host.attachShadow({ mode: "closed" }); // page scripts cannot reach the buttons
     shadow.innerHTML = `
       <style>
-        :host { all: initial; position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; }
+        :host { all: initial; position: fixed; z-index: 2147483647; --gap: 16px; }
+        :host([data-corner="br"]) { right: var(--gap); bottom: var(--gap); }
+        :host([data-corner="bl"]) { left: var(--gap); bottom: var(--gap); }
+        :host([data-corner="tr"]) { right: var(--gap); top: var(--gap); }
+        :host([data-corner="tl"]) { left: var(--gap); top: var(--gap); }
         @media print { :host { display: none; } }
-        .pill { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px;
+        .pill { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 10px;
           background: #0f1a2b; color: #e7ecf3; border: 1px solid #26374f; border-radius: 999px;
-          font: 13px/1.3 -apple-system, "Segoe UI", Roboto, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+          font: 13px/1.3 -apple-system, "Segoe UI", Roboto, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.35);
+          cursor: grab; user-select: none; touch-action: none; }
+        .pill.dragging { cursor: grabbing; opacity: .85; }
+        .grip { color: #93a2b8; font-size: 12px; letter-spacing: -3px; padding-right: 2px; }
+        :host([data-collapsed]) .pill { width: 30px; height: 30px; padding: 0; justify-content: center; cursor: pointer; }
+        :host([data-collapsed]) .pill > :not(.dot) { display: none; }
+        :host([data-collapsed]) .dot { width: 12px; height: 12px; }
         .dot { width: 8px; height: 8px; border-radius: 50%; background: #f2a93b; flex: none; }
         .dot.busy { animation: pulse 1s ease-in-out infinite; }
         .dot.done { background: #3fb950; }
@@ -408,16 +419,19 @@
         .auto { background: transparent; color: #93a2b8; border: 1px solid #26374f; padding: 3px 10px; }
         .auto:hover { color: #e7ecf3; border-color: #93a2b8; }
         .auto.on { color: #3fb950; border-color: #3fb950; }
-        .close { background: transparent; color: #93a2b8; border: none; padding: 0 2px; font-size: 16px; line-height: 1; }
-        .close:hover { color: #e7ecf3; }
+        .min, .close { background: transparent; color: #93a2b8; border: none; padding: 0 3px; font-size: 16px; line-height: 1; }
+        .min:hover, .close:hover { color: #e7ecf3; }
       </style>
-      <div class="pill">
+      <div class="pill" title="Drag to another corner">
+        <span class="grip">⋮⋮</span>
         <span class="dot"></span>
         <span class="msg"></span>
         <button class="toggle"></button>
         <button class="auto"></button>
+        <button class="min" title="Minimize to a dot (click the dot to expand)">–</button>
         <button class="close" title="Stop translating on this page and hide">×</button>
       </div>`;
+    pillEl = shadow.querySelector(".pill");
     dotEl = shadow.querySelector(".dot");
     msgEl = shadow.querySelector(".msg");
     toggleBtn = shadow.querySelector(".toggle");
@@ -425,8 +439,81 @@
     // only real clicks count: a page cannot toggle anything with synthetic events
     toggleBtn.addEventListener("click", (e) => e.isTrusted && toggle());
     autoBtn.addEventListener("click", (e) => e.isTrusted && setAuto(state.autoNeedsGrant || !state.auto));
+    shadow.querySelector(".min").addEventListener("click", (e) => e.isTrusted && setCollapsed(true));
     shadow.querySelector(".close").addEventListener("click", (e) => e.isTrusted && stop());
+    wireDrag();
+    host.dataset.corner = pillPrefs.corner;
+    if (pillPrefs.collapsed) host.setAttribute("data-collapsed", "");
     document.documentElement.appendChild(host);
+  }
+
+  // Drag the pill anywhere; on release it snaps to the nearest screen corner.
+  // A plain click on the collapsed dot expands it. Only trusted input counts.
+  function wireDrag() {
+    let drag = null;
+    let suppressClick = false;
+    pillEl.addEventListener("pointerdown", (e) => {
+      if (!e.isTrusted || e.button !== 0) return;
+      if (e.target.closest("button") && !host.hasAttribute("data-collapsed")) return; // buttons keep their clicks
+      drag = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
+      pillEl.setPointerCapture(e.pointerId);
+    });
+    pillEl.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      pillEl.classList.add("dragging");
+      host.style.transform = `translate(${dx}px, ${dy}px)`;
+    });
+    const end = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const moved = drag.moved;
+      drag = null;
+      pillEl.classList.remove("dragging");
+      host.style.transform = "";
+      if (!moved) return;
+      setCorner((e.clientY < innerHeight / 2 ? "t" : "b") + (e.clientX < innerWidth / 2 ? "l" : "r"));
+      suppressClick = true;
+      setTimeout(() => (suppressClick = false), 0);
+    };
+    pillEl.addEventListener("pointerup", end);
+    pillEl.addEventListener("pointercancel", end);
+    pillEl.addEventListener("click", (e) => {
+      if (!e.isTrusted || suppressClick) return;
+      if (host.hasAttribute("data-collapsed")) setCollapsed(false);
+    });
+  }
+
+  function setCorner(corner) {
+    pillPrefs.corner = corner;
+    if (host) host.dataset.corner = corner;
+    savePillPrefs();
+  }
+
+  function setCollapsed(collapsed) {
+    pillPrefs.collapsed = collapsed;
+    if (host) host.toggleAttribute("data-collapsed", collapsed);
+    savePillPrefs();
+    render();
+  }
+
+  function savePillPrefs() {
+    chrome.storage?.local?.set({ pill: { ...pillPrefs } }).catch(() => {});
+  }
+
+  async function loadPillPrefs() {
+    if (!IS_TOP || !chrome.storage?.local) return;
+    try {
+      const { pill } = await chrome.storage.local.get("pill");
+      if (pill && ["tl", "tr", "bl", "br"].includes(pill.corner)) pillPrefs.corner = pill.corner;
+      if (pill && typeof pill.collapsed === "boolean") pillPrefs.collapsed = pill.collapsed;
+    } catch {}
+    if (host) {
+      host.dataset.corner = pillPrefs.corner;
+      host.toggleAttribute("data-collapsed", pillPrefs.collapsed);
+    }
   }
 
   function render() {
@@ -466,7 +553,9 @@
     }
     msgEl.textContent = text;
     msgEl.title = text;
+    pillEl.title = host.hasAttribute("data-collapsed") ? `${text} — click to expand, drag to move` : "Drag to another corner";
     dotEl.className = `dot ${kind}`;
+    if (state.fatal && host.hasAttribute("data-collapsed")) setCollapsed(false); // errors must be seen
     toggleBtn.textContent = state.showing === "my" ? "Show original" : "Show Burmese";
     toggleBtn.hidden = n === 0;
     if (state.autoNeedsGrant) {
@@ -543,12 +632,13 @@
       state.showing = "my";
       applyAll();
     }
+    loadPillPrefs().then(ensurePill);
     ensurePill();
     readAuto();
     observeAll();
     pump();
   }
 
-  window.__gptBurmese = { run, toggle, stop, setAuto, store, state, queue };
+  window.__gptBurmese = { run, toggle, stop, setAuto, setCollapsed, setCorner, store, state, queue };
   run();
 })();
