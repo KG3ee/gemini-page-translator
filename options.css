@@ -66,3 +66,42 @@ button {
   color: var(--amber);
   font-size: 13px;
 }
+
+h2 {
+  font-size: 14px;
+  margin: 32px 0 6px;
+  color: var(--text);
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  margin-top: 10px;
+}
+
+.sites {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+
+.sites li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.sites li.empty {
+  color: var(--text-dim);
+  border-bottom: none;
+}
+
+.sites button {
+  margin: 0;
+  padding: 3px 10px;
+  font-size: 12px;
+}

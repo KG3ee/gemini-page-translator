@@ -26,6 +26,15 @@
   <button id="saveBtn">Save</button>
   <span id="savedMsg" class="saved" hidden>Saved.</span>
 
+  <h2>Auto-translate sites</h2>
+  <p class="hint">Pages on these sites translate on their own as they load. Turn a site on or off from the pill on any of its pages, or remove it here.</p>
+  <ul id="autoSites" class="sites"></ul>
+
+  <h2>Translation cache</h2>
+  <p class="hint">Every translated fragment is remembered on this machine, so revisiting a page (or hitting the same menu text across a site) costs nothing. The cache is per model.</p>
+  <p id="cacheStats" class="hint">…</p>
+  <button id="clearCacheBtn" class="secondary">Clear cache</button>
+
   <script src="options.js"></script>
 </body>
 </html>

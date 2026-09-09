@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Gemini Page Translator",
-  "version": "1.1.0",
-  "description": "Translates the current webpage into Burmese using your own Gemini API key, leaving code and technical identifiers untouched.",
+  "version": "1.5.0",
+  "description": "Translates the webpage you are reading into Burmese in place (right-click → Translate to Burmese with Gemini) using your own Gemini API key. Code, commands, paths and URLs stay untouched.",
   "permissions": [
     "sidePanel",
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "contextMenus",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*",
@@ -35,5 +37,13 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "commands": {
+    "translate-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+B"
+      },
+      "description": "Translate this page to Burmese in place"
+    }
   }
 }

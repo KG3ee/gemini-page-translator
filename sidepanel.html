@@ -14,7 +14,9 @@
   <main>
     <div id="pageInfo" class="page-info"></div>
 
-    <button id="translateBtn">Translate this page</button>
+    <button id="translateInPlaceBtn">Translate this page in place</button>
+    <p class="hint">Right-click any page → <b>Translate to Burmese with Gemini</b>, or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>.</p>
+    <button id="translateBtn" class="secondary">Translate in this panel instead</button>
 
     <div id="status" class="status" hidden></div>
 
@@ -26,6 +28,7 @@
     <article id="output" class="output"></article>
   </main>
 
+  <script src="prompt.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
