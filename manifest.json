@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gemini Page Translator",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Translates the webpage you are reading into Burmese in place (right-click → Translate to Burmese with Gemini) using your own Gemini API key. Code, commands, paths and URLs stay untouched.",
   "permissions": [
     "sidePanel",
@@ -43,7 +43,7 @@
   "commands": {
     "translate-page": {
       "suggested_key": {
-        "default": "Alt+Shift+B"
+        "default": "Alt+Shift+M"
       },
       "description": "Translate this page to Burmese in place"
     }

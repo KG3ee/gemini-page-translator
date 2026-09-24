@@ -13,7 +13,7 @@ After editing any file, click **Reload** on `chrome://extensions`.
 
 ## Use
 
-**In place (default).** Right-click anywhere on a page → **Translate to Burmese with Gemini**, or press `Alt+Shift+B`. The page's text is replaced with Burmese where it stands; layout, links, images and code blocks stay exactly as they were. A small pill shows progress and has a **Show original / Show Burmese** toggle; its × stops translating (run it again to resume). Drag the pill to any corner of the screen if it covers something, or press – to shrink it to a dot (click the dot to expand). The corner and the minimized state are remembered on every page.
+**In place (default).** Right-click anywhere on a page → **Translate to Burmese with Gemini**, or press `Alt+Shift+M`. The page's text is replaced with Burmese where it stands; layout, links, images and code blocks stay exactly as they were. A small pill shows progress and has a **Show original / Show Burmese** toggle; its × stops translating (run it again to resume). Drag the pill to any corner of the screen if it covers something, or press – to shrink it to a dot (click the dot to expand). The corner and the minimized state are remembered on every page.
 
 **Auto on this site.** The pill has an **Auto on this site** button. Turn it on and every page you open on that domain translates by itself as it loads — the equivalent of Chrome's "Always translate English", but through Gemini. Chrome asks once for permission to read that site; the extension holds no standing access to any other site. Turn auto off from the same button, or from the list on the settings page, where you can also limit an entry to one section (`freecodecamp.org/learn`). The pill's × only stops the current page; it does not switch auto off.
 
