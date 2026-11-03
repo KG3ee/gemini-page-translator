@@ -315,7 +315,7 @@ test("picker list: 8 entries with labels and prices (default first)", () => {
   assert.equal(list.length, 8);
   assert.equal(list[0].id, LUNA);
   assert.match(list.find((m) => m.id === "openai/gpt-6-luna").text, /\$0\.10 in \/ \$0\.50 out/);
-  assert.match(list.find((m) => m.id === "deepseek/deepseek-v4-pro-0813").text, /\$0\.115 in \/ \$4\.00 out/);
+  assert.match(list.find((m) => m.id === "deepseek/deepseek-v4-pro-0813").text, /\$1\.32 in \/ \$3\.96 out/);
   assert.match(list.find((m) => m.id === "google/gemini-3.8-flash").text, /\$0\.825 in \/ \$4\.13 out/);
   assert.equal(or.orLabel("openrouter:google/gemini-4-argon"), "Gemini 4 Argon");
   assert.equal(or.orLabel("gemini-3.8-flash"), "gemini-3.8-flash");
