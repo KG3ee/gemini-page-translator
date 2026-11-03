@@ -87,7 +87,7 @@ async function callGemini(apiKey, model, pageText) {
 }
 
 // OpenRouter, one JSON reply. Same body shape and fallback rule as the worker:
-// the other model on anything but 401/402/403 (key or credit).
+// the other model on anything but 401/402 (key or credit); a 403 falls back once.
 async function callOpenRouter(apiKey, model, pageText) {
   let firstErr = null;
   for (const m of [model, orFallbackFor(model)].filter(Boolean)) {
@@ -109,7 +109,7 @@ async function callOpenRouter(apiKey, model, pageText) {
       if (!text) throw orError(502, "empty answer");
       return text;
     } catch (err) {
-      if (err.noFallback) throw err;
+      if (orStops(err, m === model)) throw err;
       firstErr ??= err;
     }
   }
@@ -132,7 +132,7 @@ function renderOutput(text) {
 async function getSettings() {
   const o = await chrome.storage.local.get(["provider", "openrouterKey", "openrouterModel", "apiKey", "model"]);
   if (o.provider === "gemini") return { provider: "gemini", apiKey: o.apiKey || "", model: o.model || GPT_DEFAULT_MODEL };
-  return { provider: "openrouter", apiKey: o.openrouterKey || "", model: o.openrouterModel || OR_DEFAULT_MODEL };
+  return { provider: "openrouter", apiKey: o.openrouterKey || "", model: orClampModel(o.openrouterModel) };
 }
 
 async function handleTranslate() {

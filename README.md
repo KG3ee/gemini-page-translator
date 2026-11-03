@@ -51,7 +51,7 @@ node --test test/openrouter.test.mjs                                  # SSE pars
 
 ## Changelog
 
-- **1.8.0** — OpenRouter provider (default): GPT-5.6 Luna with automatic Gemini 3.1 Pro fallback, zero-data-retention routing on every request; direct Gemini kept as an option. New options page (provider, OpenRouter key, model). Cache keys include provider+model of the model that answered.
+- **1.8.0** — OpenRouter provider (default): GPT-5.6 Luna with automatic Gemini 3.1 Pro fallback, zero-data-retention routing on every request; direct Gemini kept as an option. New options page (provider, OpenRouter key, model). Cache keys include provider+model of the model that answered. Review fixes: a failed attempt's text is never mixed into a later answer or cached, a 403 (moderation) falls back to Gemini once, and only listed models are ever sent.
 - 1.7.3 — default shortcut `Alt+Shift+M`.
 
 ## Testing without touching your real profile

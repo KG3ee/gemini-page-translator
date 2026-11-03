@@ -287,7 +287,7 @@ async function getConfig() {
     const model = o.model || GPT_DEFAULT_MODEL;
     return { provider: "gemini", key: o.apiKey || "", model, cacheId: model, label: "Gemini", keyHint: "No Gemini API key set. Click the extension icon → ⚙ to add one." };
   }
-  const model = o.openrouterModel || OR_DEFAULT_MODEL;
+  const model = orClampModel(o.openrouterModel);
   return {
     provider: "openrouter", key: o.openrouterKey || "", model, cacheId: `openrouter:${model}`, label: "OpenRouter",
     keyHint: "No OpenRouter API key set. Click the extension icon → ⚙ to add one.",
@@ -345,6 +345,7 @@ async function streamFragments(fragments, title, site, signal, post) {
   }
   const ask = [...groups.values()].map((ix) => ix[0]);
   const fresh = [];
+  const onAttempt = () => (fresh.length = 0); // each attempt (and model) fills its own copy: never mix two answers
   const onElement = (k, text) => {
     fresh[k] = text;
     const t = (text || "").trim();
@@ -356,12 +357,13 @@ async function streamFragments(fragments, title, site, signal, post) {
   let complete;
   let answeredId = cfg.cacheId; // cache under the model that actually answered
   if (cfg.provider === "openrouter") {
-    const r = await callOpenRouterStream(cfg, asked, cleanTitle, signal, onElement);
+    const r = await callOpenRouterStream(cfg, asked, cleanTitle, signal, onElement, onAttempt);
     complete = r.complete;
     answeredId = orCacheId(r.model);
   } else {
-    complete = await callGeminiStream(cfg.key, cfg.model, asked, cleanTitle, signal, onElement);
+    complete = await callGeminiStream(cfg.key, cfg.model, asked, cleanTitle, signal, onElement, onAttempt);
   }
+  // fresh holds only the answering attempt's elements, so the count check is meaningful
   if (!complete || fresh.length !== ask.length) return { cached, mismatch: true };
 
   const toStore = {};
@@ -420,9 +422,11 @@ function retryDelayFrom(data) {
 
 // Same retry spirit as the Gemini path, but the primary model gets one retry and
 // then yields to the fallback (same key, other model) on anything that is not
-// auth/credit (401/402/403 stop at once with a clear message).
+// auth/credit (401/402 stop at once with a clear message). A 403 from the primary
+// (also what moderation returns) falls back once; a 403 from the fallback stops.
+// onAttempt() runs before every request so the caller can drop a failed attempt's elements.
 // Resolves { complete, model } with the model that actually answered.
-async function callOpenRouterStream(cfg, fragments, title, signal, onElement) {
+async function callOpenRouterStream(cfg, fragments, title, signal, onElement, onAttempt) {
   const messages = [
     { role: "system", content: FRAGMENT_SYSTEM_PROMPT },
     { role: "user", content: `Page title: ${title || "(untitled)"}\n\nFragments (JSON array of ${fragments.length}):\n${JSON.stringify(fragments)}` },
@@ -439,6 +443,7 @@ async function callOpenRouterStream(cfg, fragments, title, signal, onElement) {
         if (signal?.aborted) throw fail("Cancelled.");
         await rateLimit();
         try {
+          onAttempt();
           const r = await orStream({ apiKey: cfg.key, model, messages, signal, onElement });
           if (!r.complete) console.warn("OpenRouter stream ended without a complete array", model, r.finish);
           return { complete: r.complete, model };
@@ -450,7 +455,7 @@ async function callOpenRouterStream(cfg, fragments, title, signal, onElement) {
           await sleep(e.retryAfterMs ? Math.min(e.retryAfterMs, 60000) : backoff(attempt));
         }
       }
-      if (err.noFallback) throw fail(err.message); // key or credit: the other model would fail the same way
+      if (orStops(err, model === cfg.model)) throw fail(err.message); // key or credit (or 403 twice): the other model would fail the same way
       firstErr ??= err;
       console.warn(`OpenRouter ${model} failed (${err.status}), ${model === cfg.model && fallback ? "trying " + fallback : "no more models"}`);
     }
@@ -462,7 +467,8 @@ async function callOpenRouterStream(cfg, fragments, title, signal, onElement) {
 
 // Resolves true when the array closed cleanly (all elements delivered through
 // onElement), false when the answer was blocked, truncated or not an array.
-async function callGeminiStream(apiKey, model, fragments, title, signal, onElement) {
+// onAttempt() runs before every request (see callOpenRouterStream).
+async function callGeminiStream(apiKey, model, fragments, title, signal, onElement, onAttempt) {
   const url = `${GEMINI_ENDPOINT}${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
   const body = {
     system_instruction: { parts: [{ text: FRAGMENT_SYSTEM_PROMPT }] },
@@ -526,6 +532,7 @@ async function callGeminiStream(apiKey, model, fragments, title, signal, onEleme
       }
 
       // Stream: "data: {...}\n\n" events, each carrying a piece of the JSON array text.
+      onAttempt();
       const parser = new ArrayStringParser();
       const reader = res.body.getReader();
       const decoder = new TextDecoder();

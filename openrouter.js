@@ -25,12 +25,24 @@ const OR_MODELS = {
   },
 };
 
+// Only listed models are ever sent. A slug edited into storage (e.g. an Anthropic
+// model, banned for Burmese) or an inherited name like "constructor" gets the default.
+function orClampModel(model) {
+  return typeof model === "string" && Object.hasOwn(OR_MODELS, model) ? model : OR_DEFAULT_MODEL;
+}
+
 // Model to try when `model` fails with something other than auth/credit.
 // Unknown slugs fall back to Gemini 3.1 Pro.
 function orFallbackFor(model) {
-  const f = OR_MODELS[model]?.fallback || "google/gemini-3.1-pro-preview";
+  const f = (Object.hasOwn(OR_MODELS, model) && OR_MODELS[model].fallback) || "google/gemini-3.1-pro-preview";
   return f === model ? null : f;
 }
+
+// Does this error end the run instead of moving to the next model? 401/402 always
+// (key or credit: the same key fails on the fallback too). 403 is also what
+// OpenRouter's moderation returns for a flagged input, so the primary's 403 falls
+// back to the other model once; a 403 from the fallback stops.
+const orStops = (err, isPrimary) => !!err.noFallback || (!isPrimary && err.status === 403);
 
 function orHeaders(apiKey) {
   // No HTTP-Referer / X-Title: they would list this private tool on OpenRouter's public app rankings.
@@ -51,8 +63,9 @@ function orBuildBody(model, messages, { stream = true } = {}) {
   };
 }
 
-// Error for an HTTP status / in-stream error. 401/402/403 are the key or the
-// credit: the fallback uses the same key, so it would fail the same way.
+// Error for an HTTP status / in-stream error. 401/402 are the key or the credit:
+// the fallback uses the same key, so it would fail the same way (noFallback).
+// 403 may be the key or a moderation flag on the input; see orStops().
 function orError(status, apiMessage) {
   const detail = apiMessage ? ` (${String(apiMessage).slice(0, 200)})` : "";
   let message;
@@ -65,7 +78,6 @@ function orError(status, apiMessage) {
     noFallback = true;
   } else if (status === 403) {
     message = `OpenRouter refused this key or request${detail}. Check the key at openrouter.ai/settings/keys.`;
-    noFallback = true;
   } else if (status === 429) message = "OpenRouter is rate-limiting requests.";
   else if (status >= 500 || status === 408) message = `OpenRouter or the model provider is unavailable (${status}).`;
   else if (status === 0) message = "Could not reach OpenRouter (network).";
@@ -223,7 +235,7 @@ async function orStream({ apiKey, model, messages, signal, onElement, fetchImpl 
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    OR_ENDPOINT, OR_DEFAULT_MODEL, OR_MODELS, orFallbackFor, orHeaders, orBuildBody, orError, orRetryable,
+    OR_ENDPOINT, OR_DEFAULT_MODEL, OR_MODELS, orClampModel, orFallbackFor, orStops, orHeaders, orBuildBody, orError, orRetryable,
     OrSseParser, ArrayStringParser, orStream,
   };
 }
