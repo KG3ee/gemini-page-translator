@@ -218,16 +218,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       );
       return true;
     case "set-model": {
-      // Saved under the same key the settings page uses, then every frame of the
-      // tab re-translates with it (the cache is per model, so switching back is instant).
-      const model = orClampModel(msg.model);
-      const tabId = sender.tab?.id;
+      // Saved under the same key the settings page uses. Every live page (all tabs, all
+      // frames) hears the storage change and re-translates; the cache is per model.
       chrome.storage.local
-        .set({ openrouterModel: model })
-        .then(() => {
-          if (tabId) chrome.tabs.sendMessage(tabId, { type: "retranslate", model }).catch(() => {});
-          sendResponse({ ok: true, model });
-        })
+        .set({ openrouterModel: orClampModel(msg.model) })
+        .then(() => sendResponse({ ok: true, model: orClampModel(msg.model) }))
         .catch(() => sendResponse({ ok: false }));
       return true;
     }

@@ -303,6 +303,7 @@ test("request shape per model: lowest reasoning, ZDR + no training always, Gemin
       assert.equal(b.provider.allow_fallbacks, false, m);
       assert.equal(b.service_tier, "default", m);
     } else {
+      if (m.startsWith("deepseek/")) assert.ok(!b.provider.quantizations.includes("fp4") && !b.provider.quantizations.includes("int4"), m);
       assert.equal(b.provider.only, undefined, m);
       assert.equal(b.service_tier, undefined, m);
     }

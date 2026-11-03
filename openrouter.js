@@ -32,6 +32,8 @@ const OR_MODELS = {
     label: "DeepSeek V4 Pro",
     price: [0.115, 4.0],
     reasoning: { effort: "none" },
+    // no fp4 hosts (Relace, Wafer are the cheap fp4 ones): fp8 or better, or a host that does not say
+    route: { quantizations: ["fp8", "fp16", "bf16", "fp32", "unknown"] },
     fallback: "google/gemini-3.1-pro-preview",
   },
   "google/gemini-4-argon": {

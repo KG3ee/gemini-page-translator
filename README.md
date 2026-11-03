@@ -49,11 +49,12 @@ Only text near what you are looking at is sent: the screen you see plus one scre
 node --test test/openrouter.test.mjs                                  # SSE parser, request builder, stream reader (no network)
 (set -a; . ~/.config/openrouter.env; set +a; node test/e2e-openrouter.mjs [primary-slug])   # real OpenRouter call through background.js
 (set -a; . ~/.config/openrouter.env; set +a; node test/e2e-models.mjs <slug> [<slug> ...])  # one tiny real call per slug, fallback off
+# pill switch harness (no network): serve the repo (python3 -m http.server), open /test/browser/index.html, inject /content.js, drive window.__shim (setModel, requests, open); see test/browser/shim.js
 ```
 
 ## Changelog
 
-- **1.9.0** — Eight OpenRouter models (adds GPT-6 Luna, DeepSeek V4 Pro, Gemini 4 Argon, Gemini 3.8 / 3.7 / 3.6 Flash) with prices in the settings dropdown. Model select in the in-page pill: pick a model and the page re-translates with it. The pill shows which model actually answered (and flags a fallback).
+- **1.9.0** — Eight OpenRouter models (adds GPT-6 Luna, DeepSeek V4 Pro, Gemini 4 Argon, Gemini 3.8 / 3.7 / 3.6 Flash) with prices in the settings dropdown. Model select in the in-page pill: pick a model and the page re-translates with it. The pill shows which model actually answered (and flags a fallback). Follow-up fixes: a switch now cancels in-flight requests cleanly and re-collects below-the-fold text; a model change made in another tab or in settings re-translates every live page; the select commits after a 600 ms pause; DeepSeek V4 Pro skips fp4-quantized hosts (`quantizations` filter, ZDR kept).
 - **1.8.0** — OpenRouter provider (default): GPT-5.6 Luna with automatic Gemini 3.1 Pro fallback, zero-data-retention routing on every request; direct Gemini kept as an option. New options page (provider, OpenRouter key, model). Cache keys include provider+model of the model that answered. Review fixes: a failed attempt's text is never mixed into a later answer or cached, a 403 (moderation) falls back to Gemini once, and only listed models are ever sent.
 - 1.7.3 — default shortcut `Alt+Shift+M`.
 

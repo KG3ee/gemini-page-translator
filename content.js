@@ -47,7 +47,7 @@
   const SITE = location.hostname.replace(/^www\./, "");
 
   const store = new Map();        // Text -> { orig, my }
-  const seen = new WeakSet();     // Text nodes already picked up
+  let seen = new WeakSet();       // Text nodes already picked up (replaced wholesale on a model switch)
   const pendingEls = new Map();   // Element -> Set<Text> waiting for the element to come near
   const deferred = new Set();     // near but invisible (opacity 0, visibility hidden); re-checked later
   const observedRoots = new WeakSet(); // shadow roots the MutationObserver already watches
@@ -59,8 +59,9 @@
   const pillPrefs = { corner: "br", collapsed: false }; // remembered across pages
   const picker = { provider: "", selected: "", models: [] }; // OpenRouter model list for the pill's select
   const served = new Set();       // model slugs that produced the text on this page (may differ from the pick: fallback)
-  const ports = new Set();        // open translate ports, cut when the model is switched
+  const ports = new Map();        // open translate port -> cancel(): settles the request when we cut it on a model switch
   let gen = 0;                    // bumped on a model switch; answers from an older generation are dropped
+  let pendingModel = null, pickTimer; // a pick waiting out its debounce
   let host, shadow, pillEl, msgEl, byEl, modelEl, dotEl, toggleBtn, autoBtn, io, mo, observeTimer, observeDeadline = 0, retryTimer;
 
   // ---- what to translate
@@ -268,7 +269,16 @@
         return reject(/context invalidated/i.test(msg) ? wrap("The extension was reloaded — run Translate again.", false) : wrap(msg, true));
       }
       let settled = false;
-      ports.add(port);
+      // port.disconnect() from our side fires no onDisconnect here, so cancelling
+      // must settle the promise itself or the batch (and state.active) hangs forever.
+      ports.set(port, () => {
+        if (settled) return;
+        settled = true;
+        try {
+          port.disconnect();
+        } catch {}
+        reject(Object.assign(wrap("Cancelled.", false), { cancelled: true }));
+      });
       port.onMessage.addListener((m) => {
         if (m?.type === "partial") onPartial(m.i, m.text);
         else if (m?.type === "done") {
@@ -458,7 +468,19 @@
     msgEl = shadow.querySelector(".msg");
     byEl = shadow.querySelector(".by");
     modelEl = shadow.querySelector(".model");
-    modelEl.addEventListener("change", (e) => e.isTrusted && pickModel(modelEl.value));
+    // Arrow keys fire "change" on every step: commit after a pause, or at once on blur / Enter.
+    const commit = () => {
+      clearTimeout(pickTimer);
+      if (pendingModel) pickModel(pendingModel);
+    };
+    modelEl.addEventListener("change", (e) => {
+      if (!e.isTrusted) return;
+      pendingModel = modelEl.value;
+      clearTimeout(pickTimer);
+      pickTimer = setTimeout(commit, 600);
+    });
+    modelEl.addEventListener("blur", commit);
+    modelEl.addEventListener("keydown", (e) => e.key === "Enter" && e.isTrusted && commit());
     toggleBtn = shadow.querySelector(".toggle");
     autoBtn = shadow.querySelector(".auto");
     // only real clicks count: a page cannot toggle anything with synthetic events
@@ -608,7 +630,7 @@
     }
     modelEl.hidden = !list.length;
     if (list.length) {
-      modelEl.value = picker.selected;
+      modelEl.value = pendingModel || picker.selected;
       const cur = list.find((m) => m.id === picker.selected);
       if (cur) modelEl.title = `${cur.text}. Picking another model re-translates this page with it.`;
     }
@@ -632,8 +654,9 @@
   }
 
   // The picker saves the choice (background, same storage key as settings) and
-  // every frame of the tab then gets "retranslate".
+  // the storage change then makes every live page re-translate (see onChanged below).
   async function pickModel(model) {
+    pendingModel = null;
     if (model === picker.selected) return;
     const before = picker.selected;
     picker.selected = model;
@@ -651,17 +674,13 @@
   function retranslate(model) {
     if (model) picker.selected = model;
     gen++;
-    for (const p of [...ports]) {
-      try {
-        p.disconnect();
-      } catch {}
-    }
+    for (const cancel of [...ports.values()]) cancel(); // each rejects; its batch ends and state.active drops back
     ports.clear();
     for (const [node, rec] of store) {
       if (node.nodeValue === rec.my) node.nodeValue = rec.orig;
       node.parentElement?.removeAttribute(MARK);
-      seen.delete(node);
     }
+    seen = new WeakSet(); // queued, deferred, in-flight and waiting nodes must be collected again too
     store.clear();
     queue.length = 0;
     deferred.clear();
@@ -719,7 +738,13 @@
 
   chrome.runtime.onMessage.addListener((m) => {
     if (m?.type === "set-showing" && !IS_TOP && (m.showing === "my" || m.showing === "orig")) setShowing(m.showing);
-    else if (m?.type === "retranslate" && !state.stopped) retranslate(typeof m.model === "string" ? m.model : "");
+  });
+
+  // The saved model changed (picked in this pill, in another tab's pill, or in settings):
+  // every live page re-translates with it, so no tab shows a stale model's text under a new pick.
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    const c = area === "local" && changes.openrouterModel;
+    if (c && typeof c.newValue === "string" && !state.stopped) retranslate(c.newValue);
   });
 
   function run() {
