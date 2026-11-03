@@ -30,13 +30,13 @@ const OR_MODELS = {
   },
   "deepseek/deepseek-v4-pro-0813": {
     label: "DeepSeek V4 Pro",
-    // Nebius (fp8) price, checked 2026-11-03 on /endpoints/zdr: with fp4 hosts excluded the
-    // ZDR hosts run $0.37 to $1.65 in / $2.60 to $4.95 out; the 0.115 / 4.00 list price was Wafer (fp4).
+    // Nebius (fp8) price, checked 2026-11-03 on /endpoints/zdr; the 0.115 / 4.00 list price was Wafer (fp4).
+    // fp8+ declared hosts only: Novita 0.99/2.97, DeepInfra 1.30/2.60, CoreWeave 1.31, Nebius 1.32/3.96.
     price: [1.32, 3.96],
-    note: "Nebius fp8; host may vary",
+    note: "Nebius fp8 price; fp8+ hosts only",
     reasoning: { effort: "none" },
-    // no fp4 hosts (Relace, Wafer, Baseten, Sail are fp4): fp8 or better, or a host that does not say
-    route: { quantizations: ["fp8", "fp16", "bf16", "fp32", "unknown"] },
+    // only hosts that declare fp8 or better (no fp4, no undeclared "unknown" hosts)
+    route: { quantizations: ["fp8", "fp16", "bf16", "fp32"] },
     fallback: "google/gemini-3.1-pro-preview",
   },
   "google/gemini-4-argon": {
