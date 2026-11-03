@@ -1,6 +1,7 @@
 // Service worker: context menu + keyboard shortcut + per-site auto mode, and
-// the single place that talks to Gemini (streamed, with a per-site cache).
-importScripts("prompt.js");
+// the single place that talks to the model (OpenRouter by default, or Gemini direct;
+// streamed, with a per-site cache).
+importScripts("prompt.js", "openrouter.js");
 
 const MENU_ID = "gpt-translate-page";
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/";
@@ -25,7 +26,7 @@ function installMenu() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: MENU_ID,
-      title: "Translate to Burmese with Gemini",
+      title: "Translate to Burmese",
       contexts: ["all"],
     });
   });
@@ -67,8 +68,8 @@ chrome.commands.onCommand.addListener(async (command) => {
 // top frame if some frame is off-limits. Pages Chrome refuses to script
 // (chrome://, the Web Store, the PDF viewer) just flash the badge.
 async function translateTab(tabId, { auto = false } = {}) {
-  const { apiKey } = await chrome.storage.local.get("apiKey");
-  if (!apiKey) {
+  const { key } = await getConfig();
+  if (!key) {
     if (!auto) chrome.runtime.openOptionsPage();
     return;
   }
@@ -276,7 +277,25 @@ function validateFragments(fragments) {
   if (chars > MAX_CHARS) throw fail("Bad request: batch too large.");
 }
 
-// ---- cache: key = hash(version, model, site, text) -> { t: translation, at: ms }
+// ---- settings: which provider, which key, which model
+
+// Default provider is OpenRouter. Stored: provider ("openrouter" | "gemini"),
+// openrouterKey + openrouterModel, and for direct Gemini apiKey + model.
+async function getConfig() {
+  const o = await chrome.storage.local.get(["provider", "openrouterKey", "openrouterModel", "apiKey", "model"]);
+  if (o.provider === "gemini") {
+    const model = o.model || GPT_DEFAULT_MODEL;
+    return { provider: "gemini", key: o.apiKey || "", model, cacheId: model, label: "Gemini", keyHint: "No Gemini API key set. Click the extension icon → ⚙ to add one." };
+  }
+  const model = o.openrouterModel || OR_DEFAULT_MODEL;
+  return {
+    provider: "openrouter", key: o.openrouterKey || "", model, cacheId: `openrouter:${model}`, label: "OpenRouter",
+    keyHint: "No OpenRouter API key set. Click the extension icon → ⚙ to add one.",
+  };
+}
+const orCacheId = (model) => `openrouter:${model}`;
+
+// ---- cache: key = hash(version, provider+model, site, text) -> { t: translation, at: ms }
 
 async function cacheKey(model, site, text) {
   const data = new TextEncoder().encode(`${CACHE_VERSION}\n${model}\n${site}\n${text}`);
@@ -290,28 +309,39 @@ async function cacheKey(model, site, text) {
 async function streamFragments(fragments, title, site, signal, post) {
   validateFragments(fragments);
   if (!fragments.length) return { cached: 0, mismatch: false };
-  const { apiKey, model } = await chrome.storage.local.get(["apiKey", "model"]);
-  if (!apiKey) throw fail("No Gemini API key set. Click the extension icon → ⚙ to add one.");
-  const m = model || GPT_DEFAULT_MODEL;
+  const cfg = await getConfig();
+  if (!cfg.key) throw fail(cfg.keyHint);
 
-  const keys = await Promise.all(fragments.map((f) => cacheKey(m, site, f)));
-  const hits = await chrome.storage.local.get(keys);
+  // Cache ids to look up: the configured model, plus (OpenRouter) the fallback model,
+  // so text already translated by the fallback is not paid for again while the primary is down.
+  const lookupIds = [cfg.cacheId];
+  if (cfg.provider === "openrouter") {
+    const fb = orFallbackFor(cfg.model);
+    if (fb) lookupIds.push(orCacheId(fb));
+  }
+  const keysById = new Map(await Promise.all(lookupIds.map(async (id) => [id, await Promise.all(fragments.map((f) => cacheKey(id, site, f)))])));
+  const allKeys = [...keysById.values()].flat();
+  const hits = await chrome.storage.local.get(allKeys);
   const missing = [];
   let cached = 0;
-  keys.forEach((k, i) => {
-    const t = hits[k]?.t;
-    if (typeof t === "string" && t) {
-      cached++;
-      post({ type: "partial", i, text: t });
-    } else missing.push(i);
+  fragments.forEach((_, i) => {
+    for (const id of lookupIds) {
+      const t = hits[keysById.get(id)[i]]?.t;
+      if (typeof t === "string" && t) {
+        cached++;
+        post({ type: "partial", i, text: t });
+        return;
+      }
+    }
+    missing.push(i);
   });
   if (!missing.length) return { cached, mismatch: false };
 
   // identical texts within the batch are sent once
-  const groups = new Map(); // key -> [indices]
+  const groups = new Map(); // text -> [indices]
   for (const i of missing) {
-    if (!groups.has(keys[i])) groups.set(keys[i], []);
-    groups.get(keys[i]).push(i);
+    if (!groups.has(fragments[i])) groups.set(fragments[i], []);
+    groups.get(fragments[i]).push(i);
   }
   const ask = [...groups.values()].map((ix) => ix[0]);
   const fresh = [];
@@ -319,17 +349,28 @@ async function streamFragments(fragments, title, site, signal, post) {
     fresh[k] = text;
     const t = (text || "").trim();
     if (!t || k >= ask.length) return;
-    for (const j of groups.get(keys[ask[k]])) post({ type: "partial", i: j, text: t });
+    for (const j of groups.get(fragments[ask[k]])) post({ type: "partial", i: j, text: t });
   };
-  const complete = await callGeminiStream(apiKey, m, ask.map((i) => fragments[i]), String(title || "").slice(0, MAX_TITLE), signal, onElement);
+  const cleanTitle = String(title || "").slice(0, MAX_TITLE);
+  const asked = ask.map((i) => fragments[i]);
+  let complete;
+  let answeredId = cfg.cacheId; // cache under the model that actually answered
+  if (cfg.provider === "openrouter") {
+    const r = await callOpenRouterStream(cfg, asked, cleanTitle, signal, onElement);
+    complete = r.complete;
+    answeredId = orCacheId(r.model);
+  } else {
+    complete = await callGeminiStream(cfg.key, cfg.model, asked, cleanTitle, signal, onElement);
+  }
   if (!complete || fresh.length !== ask.length) return { cached, mismatch: true };
 
   const toStore = {};
   const now = Date.now();
-  ask.forEach((i, k) => {
+  for (let k = 0; k < ask.length; k++) {
     const t = (fresh[k] || "").trim();
-    if (t) toStore[keys[i]] = { t, at: now };
-  });
+    if (!t) continue;
+    toStore[await cacheKey(answeredId, site, fragments[ask[k]])] = { t, at: now };
+  }
   const n = Object.keys(toStore).length;
   if (n) {
     chrome.storage.local.set(toStore).catch((err) => console.warn("cache write failed", err));
@@ -375,44 +416,47 @@ function retryDelayFrom(data) {
   return secs > 0 ? Math.min(secs * 1000, 60000) : 0;
 }
 
-// Pulls complete string elements out of a JSON array that arrives in pieces.
-class ArrayStringParser {
-  constructor() {
-    this.started = false;
-    this.closed = false;
-    this.inString = false;
-    this.escape = false;
-    this.token = "";
-  }
-  feed(chunk) {
-    const out = [];
-    for (const ch of chunk) {
-      if (this.closed) break;
-      if (!this.started) {
-        if (ch === "[") this.started = true;
-        continue;
-      }
-      if (this.inString) {
-        this.token += ch;
-        if (this.escape) this.escape = false;
-        else if (ch === "\\") this.escape = true;
-        else if (ch === '"') {
-          this.inString = false;
-          try {
-            out.push(JSON.parse(this.token));
-          } catch {
-            out.push(this.token.slice(1, -1));
-          }
-          this.token = "";
+// ---- OpenRouter (SSE stream, one fallback model)
+
+// Same retry spirit as the Gemini path, but the primary model gets one retry and
+// then yields to the fallback (same key, other model) on anything that is not
+// auth/credit (401/402/403 stop at once with a clear message).
+// Resolves { complete, model } with the model that actually answered.
+async function callOpenRouterStream(cfg, fragments, title, signal, onElement) {
+  const messages = [
+    { role: "system", content: FRAGMENT_SYSTEM_PROMPT },
+    { role: "user", content: `Page title: ${title || "(untitled)"}\n\nFragments (JSON array of ${fragments.length}):\n${JSON.stringify(fragments)}` },
+  ];
+  const fallback = orFallbackFor(cfg.model);
+  const plan = [{ model: cfg.model, tries: 2 }, ...(fallback ? [{ model: fallback, tries: 3 }] : [])];
+
+  holdWorker();
+  try {
+    let firstErr = null;
+    for (const { model, tries } of plan) {
+      let err = null;
+      for (let attempt = 0; attempt < tries; attempt++) {
+        if (signal?.aborted) throw fail("Cancelled.");
+        await rateLimit();
+        try {
+          const r = await orStream({ apiKey: cfg.key, model, messages, signal, onElement });
+          if (!r.complete) console.warn("OpenRouter stream ended without a complete array", model, r.finish);
+          return { complete: r.complete, model };
+        } catch (e) {
+          if (e.aborted || signal?.aborted) throw fail("Cancelled.");
+          if (e.status === undefined) throw e; // a bug, not an API answer
+          err = e;
+          if (e.noFallback || !orRetryable(e.status) || attempt === tries - 1) break;
+          await sleep(e.retryAfterMs ? Math.min(e.retryAfterMs, 60000) : backoff(attempt));
         }
-        continue;
       }
-      if (ch === '"') {
-        this.inString = true;
-        this.token = '"';
-      } else if (ch === "]") this.closed = true;
+      if (err.noFallback) throw fail(err.message); // key or credit: the other model would fail the same way
+      firstErr ??= err;
+      console.warn(`OpenRouter ${model} failed (${err.status}), ${model === cfg.model && fallback ? "trying " + fallback : "no more models"}`);
     }
-    return out;
+    throw fail(firstErr.message, { retryable: orRetryable(firstErr.status), retryAfter: firstErr.status === 429 ? 10000 : 5000 });
+  } finally {
+    releaseWorker();
   }
 }
 

@@ -535,7 +535,7 @@
       text = `Original shown · ${count} translated`;
       kind = "idle";
     } else if (state.retryAt > Date.now()) {
-      text = `Gemini is busy — retrying in ${Math.ceil((state.retryAt - Date.now()) / 1000)} s`;
+      text = `The model is busy — retrying in ${Math.ceil((state.retryAt - Date.now()) / 1000)} s`;
       kind = "busy";
     } else if (state.active || queue.length) {
       text = `Translating… ${count} so far`;

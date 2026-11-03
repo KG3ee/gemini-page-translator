@@ -1,21 +1,21 @@
 # Gemini Page Translator
 
-Chrome extension that translates the page you're reading into Burmese, using your own Gemini API key. Built for reading English CS material (freeCodeCamp, HackTheBox, docs) — code, commands, file paths, and URLs are left untouched; only the prose is translated.
+Chrome/Brave extension that translates the page you're reading into Burmese, using your own OpenRouter key (GPT-5.6 Luna by default, Gemini 3.1 Pro as the automatic fallback) or, if you prefer, a Gemini API key. Built for reading English CS material (freeCodeCamp, HackTheBox, docs) — code, commands, file paths, and URLs are left untouched; only the prose is translated.
 
 ## Install (unpacked, for personal use)
 
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked** and select this folder (on the Ubuntu laptop: `~/Projects/gemini-page-translator`).
-4. Click the extension icon, then the ⚙ icon, and paste your Gemini API key (free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
+4. Click the extension icon, then the ⚙ icon, and paste your OpenRouter API key ([openrouter.ai/settings/keys](https://openrouter.ai/settings/keys), with some credit on it). To use Google directly instead, switch **Provider** to Google Gemini and paste a Gemini key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
 
 After editing any file, click **Reload** on `chrome://extensions`.
 
 ## Use
 
-**In place (default).** Right-click anywhere on a page → **Translate to Burmese with Gemini**, or press `Alt+Shift+M`. The page's text is replaced with Burmese where it stands; layout, links, images and code blocks stay exactly as they were. A small pill shows progress and has a **Show original / Show Burmese** toggle; its × stops translating (run it again to resume). Drag the pill to any corner of the screen if it covers something, or press – to shrink it to a dot (click the dot to expand). The corner and the minimized state are remembered on every page.
+**In place (default).** Right-click anywhere on a page → **Translate to Burmese**, or press `Alt+Shift+M`. The page's text is replaced with Burmese where it stands; layout, links, images and code blocks stay exactly as they were. A small pill shows progress and has a **Show original / Show Burmese** toggle; its × stops translating (run it again to resume). Drag the pill to any corner of the screen if it covers something, or press – to shrink it to a dot (click the dot to expand). The corner and the minimized state are remembered on every page.
 
-**Auto on this site.** The pill has an **Auto on this site** button. Turn it on and every page you open on that domain translates by itself as it loads — the equivalent of Chrome's "Always translate English", but through Gemini. Chrome asks once for permission to read that site; the extension holds no standing access to any other site. Turn auto off from the same button, or from the list on the settings page, where you can also limit an entry to one section (`freecodecamp.org/learn`). The pill's × only stops the current page; it does not switch auto off.
+**Auto on this site.** The pill has an **Auto on this site** button. Turn it on and every page you open on that domain translates by itself as it loads — the equivalent of Chrome's "Always translate English", but through your model. Chrome asks once for permission to read that site; the extension holds no standing access to any other site. Turn auto off from the same button, or from the list on the settings page, where you can also limit an entry to one section (`freecodecamp.org/learn`). The pill's × only stops the current page; it does not switch auto off.
 
 Translations stream in: each fragment appears the moment the model finishes it, so a long batch fills in progressively instead of landing all at once. Text inside web components (open shadow roots) and same-origin frames is covered; the pill lives in the top frame and its toggle applies to the frames too.
 
@@ -23,18 +23,36 @@ Only text near what you are looking at is sent: the screen you see plus one scre
 
 **Side panel (fallback).** Click the toolbar icon → **Translate in this panel instead** to get the translation next to the untouched page.
 
+## Providers
+
+- **OpenRouter (default).** One key, `https://openrouter.ai/api/v1/chat/completions`, streamed (`stream: true`). Models in settings: **GPT-5.6 Luna** (`openai/gpt-5.6-luna`, default, reasoning off) and **Gemini 3.1 Pro** (`google/gemini-3.1-pro-preview`, pinned to Google's standard Vertex endpoint, reasoning `low`, `service_tier: default`). Every request carries `provider: { data_collection: "deny", zdr: true }` (zero-data-retention endpoints only, no training on your text). If the chosen model fails with anything but a key or credit problem (HTTP 400/404/429/5xx, broken stream, empty answer), the other model answers automatically. 401/402/403 stop with a clear message instead, because the same key would fail again (bad key: paste a new one; credit used up: top up at openrouter.ai/settings/credits). No `HTTP-Referer`/`X-Title` headers are sent, so the tool does not show up on OpenRouter's public app lists.
+- **Google Gemini (direct).** The original path, unchanged (`streamGenerateContent`, thinking `low`, safety filters off). Pick it in settings.
+- The model that actually answered decides the cache entry (`openrouter:<slug>`, or the Gemini model name); text already translated by the fallback is reused while the primary is down.
+
 ## Notes
 
-- The API key lives only in `chrome.storage.local` on this machine and is sent as a request header straight to Google's Gemini endpoint — never in a URL, never to any other server. Anyone with access to the Chrome profile directory can read it, so restrict the key to the Generative Language API in Google Cloud and rotate it if the laptop is lost.
+- The API key lives only in `chrome.storage.local` on this machine and is sent as a request header straight to OpenRouter (or Google, for the direct Gemini provider) — never in a URL, never to any other server. Anyone with access to the browser profile directory can read it, so give the OpenRouter key a spending limit and rotate it if the laptop is lost.
 - What leaves the machine: the page title and the text fragments being translated, for pages you translate. With **Auto on this site** that includes every page of that domain you open while logged in, so switch it on only for reading sites.
-- Permissions: the only standing host permission is the Gemini endpoint. A manual translate uses Chrome's `activeTab` grant for that one tab; auto mode asks for an optional permission per site and drops it when the site is removed.
+- Permissions: the only standing host permissions are the OpenRouter and Gemini endpoints. A manual translate uses Chrome's `activeTab` grant for that one tab; auto mode asks for an optional permission per site and drops it when the site is removed.
 - Text sent: only what is near the viewport, in batches of up to 60 fragments / 5,000 characters, two requests in flight, capped at 300,000 characters per page. Navigation, footers, banners, invisible text, code blocks and code editors (Monaco, CodeMirror, Ace, GitHub's code view) are skipped. Visibility is decided from layout, not from `aria-hidden`: sites such as 16personalities mark their visible questions `aria-hidden` because a screen-reader copy exists, and those must still translate. Side-panel mode sends the first ~18,000 characters in one call.
-- Responses are streamed (`streamGenerateContent`, server-sent events) and parsed element by element; a truncated or misaligned answer is reverted and the batch is retried in halves.
+- Responses are streamed (server-sent events: OpenRouter `delta.content`, or Gemini `streamGenerateContent`) and parsed element by element; a truncated or misaligned answer is reverted and the batch is retried in halves.
 - Gemini is called with thinking off (`thinkingLevel: "low"`): translation gains nothing from reasoning and thinking was ~60% of the tokens. The system prompt is kept short (about 300 prompt tokens of overhead per request). Safety filters are off so security course material is not refused.
-- Every translated fragment is cached per site and per model (`chrome.storage.local`, up to 50,000 entries, oldest evicted). Revisiting a page or meeting the same text across a site is free and instant. The settings page shows the cache size and has a **Clear cache** button.
+- Every translated fragment is cached per site and per provider+model (`chrome.storage.local`, up to 50,000 entries, oldest evicted). Revisiting a page or meeting the same text across a site is free and instant. The settings page shows the cache size and has a **Clear cache** button.
 - Rate limits and outages are retried with Google's suggested delay; text that could not be sent stays queued and is retried, nothing is dropped. A bad key or model stops with the message in the pill.
-- Default model is `gemini-3.8-flash` (accurate, natural Burmese). `gemini-flash-lite-latest` (fastest, rougher) and `gemini-3.1-pro-preview` (best Burmese, slow) are available in settings.
+- Direct-Gemini default model is `gemini-3.8-flash` (accurate, natural Burmese). `gemini-flash-lite-latest` (fastest, rougher) and `gemini-3.1-pro-preview` (best Burmese, slow) are available in settings.
 - Pages Chrome refuses to script (`chrome://` pages, the Web Store, the built-in PDF viewer) cannot be translated; the toolbar icon briefly shows ✗.
+
+## Tests
+
+```bash
+node --test test/openrouter.test.mjs                                  # SSE parser, request builder, stream reader (no network)
+(set -a; . ~/.config/openrouter.env; set +a; node test/e2e-openrouter.mjs [primary-slug])   # real OpenRouter call through background.js
+```
+
+## Changelog
+
+- **1.8.0** — OpenRouter provider (default): GPT-5.6 Luna with automatic Gemini 3.1 Pro fallback, zero-data-retention routing on every request; direct Gemini kept as an option. New options page (provider, OpenRouter key, model). Cache keys include provider+model of the model that answered.
+- 1.7.3 — default shortcut `Alt+Shift+M`.
 
 ## Testing without touching your real profile
 

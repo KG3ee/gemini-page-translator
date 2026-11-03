@@ -86,6 +86,36 @@ async function callGemini(apiKey, model, pageText) {
   throw new Error("Gemini request failed.");
 }
 
+// OpenRouter, one JSON reply. Same body shape and fallback rule as the worker:
+// the other model on anything but 401/402/403 (key or credit).
+async function callOpenRouter(apiKey, model, pageText) {
+  let firstErr = null;
+  for (const m of [model, orFallbackFor(model)].filter(Boolean)) {
+    try {
+      let res;
+      try {
+        res = await fetch(OR_ENDPOINT, {
+          method: "POST",
+          headers: orHeaders(apiKey),
+          body: JSON.stringify(orBuildBody(m, [{ role: "user", content: buildPrompt(pageText) }], { stream: false })),
+        });
+      } catch {
+        throw orError(0);
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw orError(res.status, data?.error?.message);
+      if (data?.error) throw orError(Number(data.error.code) || 502, data.error.message);
+      const text = data?.choices?.[0]?.message?.content ?? "";
+      if (!text) throw orError(502, "empty answer");
+      return text;
+    } catch (err) {
+      if (err.noFallback) throw err;
+      firstErr ??= err;
+    }
+  }
+  throw firstErr;
+}
+
 function renderOutput(text) {
   outputEl.innerHTML = "";
   text
@@ -100,8 +130,9 @@ function renderOutput(text) {
 }
 
 async function getSettings() {
-  const { apiKey, model } = await chrome.storage.local.get(["apiKey", "model"]);
-  return { apiKey: apiKey || "", model: model || GPT_DEFAULT_MODEL };
+  const o = await chrome.storage.local.get(["provider", "openrouterKey", "openrouterModel", "apiKey", "model"]);
+  if (o.provider === "gemini") return { provider: "gemini", apiKey: o.apiKey || "", model: o.model || GPT_DEFAULT_MODEL };
+  return { provider: "openrouter", apiKey: o.openrouterKey || "", model: o.openrouterModel || OR_DEFAULT_MODEL };
 }
 
 async function handleTranslate() {
@@ -109,7 +140,7 @@ async function handleTranslate() {
   setStatus("");
   noKeyNotice.hidden = true;
 
-  const { apiKey, model } = await getSettings();
+  const { provider, apiKey, model } = await getSettings();
   if (!apiKey) {
     noKeyNotice.hidden = false;
     return;
@@ -136,7 +167,8 @@ async function handleTranslate() {
         : "Translating…"
     );
 
-    const translated = await callGemini(apiKey, model, result.text);
+    const translated =
+      provider === "gemini" ? await callGemini(apiKey, model, result.text) : await callOpenRouter(apiKey, model, result.text);
     renderOutput(translated);
     setStatus("");
   } catch (err) {

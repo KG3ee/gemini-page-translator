@@ -1,15 +1,32 @@
+const providerEl = document.getElementById("provider");
+const orKeyEl = document.getElementById("openrouterKey");
+const orModelEl = document.getElementById("openrouterModel");
 const apiKeyEl = document.getElementById("apiKey");
 const modelEl = document.getElementById("model");
 const savedMsg = document.getElementById("savedMsg");
 
+function showProvider() {
+  const gemini = providerEl.value === "gemini";
+  document.getElementById("orSection").hidden = gemini;
+  document.getElementById("geminiSection").hidden = !gemini;
+}
+providerEl.addEventListener("change", showProvider);
+
 (async () => {
-  const { apiKey, model } = await chrome.storage.local.get(["apiKey", "model"]);
-  if (apiKey) apiKeyEl.value = apiKey;
-  if (model) modelEl.value = model;
+  const o = await chrome.storage.local.get(["provider", "openrouterKey", "openrouterModel", "apiKey", "model"]);
+  providerEl.value = o.provider === "gemini" ? "gemini" : "openrouter"; // OpenRouter is the default
+  if (o.openrouterKey) orKeyEl.value = o.openrouterKey;
+  if (o.openrouterModel) orModelEl.value = o.openrouterModel;
+  if (o.apiKey) apiKeyEl.value = o.apiKey;
+  if (o.model) modelEl.value = o.model;
+  showProvider();
 })();
 
 document.getElementById("saveBtn").addEventListener("click", async () => {
   await chrome.storage.local.set({
+    provider: providerEl.value,
+    openrouterKey: orKeyEl.value.trim(),
+    openrouterModel: orModelEl.value,
     apiKey: apiKeyEl.value.trim(),
     model: modelEl.value,
   });
