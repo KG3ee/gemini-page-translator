@@ -7,23 +7,92 @@ const OR_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const OR_DEFAULT_MODEL = "openai/gpt-5.6-luna";
 
 // Per-model request shape. `reasoning` is the lowest setting the model accepts
-// (OpenRouter /models -> reasoning.supported_efforts): Luna takes "none"; Gemini
-// 3.1 Pro has mandatory reasoning (high/medium/low), so "low".
-// Gemini is pinned to Google's standard Vertex endpoint (not flex/priority).
+// (OpenRouter /models -> reasoning.supported_efforts, checked 2026-11-03):
+//   Luna 5.6 / Luna 6 / DeepSeek V4 Pro: "none"; Gemini 3.1 Pro, 4 Argon, 3.8 and
+//   3.7 Flash: reasoning is mandatory, lowest is "low"; Gemini 3.6 Flash: "minimal".
+// Every Gemini is pinned to Google's standard Vertex endpoint (google-vertex/global,
+// not flex/priority); all of them are served there. `price` = [input, output] in
+// US$ per million tokens, shown in the pickers. `label` is the short display name.
+const GEMINI_ROUTE = { order: ["google-vertex/global"], only: ["google-vertex/global"], allow_fallbacks: false };
 const OR_MODELS = {
   "openai/gpt-5.6-luna": {
     label: "GPT-5.6 Luna",
+    note: "default",
+    price: [0.2, 1.2],
     reasoning: { effort: "none" },
     fallback: "google/gemini-3.1-pro-preview",
   },
-  "google/gemini-3.1-pro-preview": {
-    label: "Gemini 3.1 Pro (via OpenRouter)",
+  "openai/gpt-6-luna": {
+    label: "GPT-6 Luna",
+    price: [0.1, 0.5],
+    reasoning: { effort: "none" },
+    fallback: "google/gemini-3.1-pro-preview",
+  },
+  "deepseek/deepseek-v4-pro-0813": {
+    label: "DeepSeek V4 Pro",
+    price: [0.115, 4.0],
+    reasoning: { effort: "none" },
+    fallback: "google/gemini-3.1-pro-preview",
+  },
+  "google/gemini-4-argon": {
+    label: "Gemini 4 Argon",
+    price: [2.0, 10.0],
     reasoning: { effort: "low" },
-    route: { order: ["google-vertex/global"], only: ["google-vertex/global"], allow_fallbacks: false },
+    route: GEMINI_ROUTE,
+    serviceTier: "default",
+    fallback: "openai/gpt-5.6-luna",
+  },
+  "google/gemini-3.1-pro-preview": {
+    label: "Gemini 3.1 Pro",
+    price: [2.0, 12.0],
+    reasoning: { effort: "low" },
+    route: GEMINI_ROUTE,
+    serviceTier: "default",
+    fallback: "openai/gpt-5.6-luna",
+  },
+  "google/gemini-3.8-flash": {
+    label: "Gemini 3.8 Flash",
+    price: [0.825, 4.13],
+    reasoning: { effort: "low" },
+    route: GEMINI_ROUTE,
+    serviceTier: "default",
+    fallback: "openai/gpt-5.6-luna",
+  },
+  "google/gemini-3.7-flash": {
+    label: "Gemini 3.7 Flash",
+    price: [0.75, 3.75],
+    reasoning: { effort: "low" },
+    route: GEMINI_ROUTE,
+    serviceTier: "default",
+    fallback: "openai/gpt-5.6-luna",
+  },
+  "google/gemini-3.6-flash": {
+    label: "Gemini 3.6 Flash",
+    price: [0.75, 3.75],
+    reasoning: { effort: "minimal" },
+    route: GEMINI_ROUTE,
     serviceTier: "default",
     fallback: "openai/gpt-5.6-luna",
   },
 };
+
+// Display name for a slug the pickers and the pill show ("openrouter:" cache ids tolerated).
+const orLabel = (slug) => {
+  const id = String(slug || "").replace(/^openrouter:/, "");
+  return Object.hasOwn(OR_MODELS, id) ? OR_MODELS[id].label : id;
+};
+
+// [{ id, label, price, compact, text }] in listing order; text = "GPT-5.6 Luna · $0.20 in / $1.20 out per M".
+const orPrice = (n) => (Number.isInteger(n * 100) ? n.toFixed(2) : String(n));
+function orModelList() {
+  return Object.entries(OR_MODELS).map(([id, c]) => ({
+    id,
+    label: c.label,
+    price: c.price,
+    compact: `${c.label} · $${orPrice(c.price[0])}/$${orPrice(c.price[1])}`,
+    text: `${c.label} · $${orPrice(c.price[0])} in / $${orPrice(c.price[1])} out per M${c.note ? ` (${c.note})` : ""}`,
+  }));
+}
 
 // Only listed models are ever sent. A slug edited into storage (e.g. an Anthropic
 // model, banned for Burmese) or an inherited name like "constructor" gets the default.
@@ -235,7 +304,7 @@ async function orStream({ apiKey, model, messages, signal, onElement, fetchImpl 
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    OR_ENDPOINT, OR_DEFAULT_MODEL, OR_MODELS, orClampModel, orFallbackFor, orStops, orHeaders, orBuildBody, orError, orRetryable,
+    OR_ENDPOINT, OR_DEFAULT_MODEL, OR_MODELS, orLabel, orModelList, orClampModel, orFallbackFor, orStops, orHeaders, orBuildBody, orError, orRetryable,
     OrSseParser, ArrayStringParser, orStream,
   };
 }

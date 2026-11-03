@@ -10,7 +10,7 @@
 
   <label for="provider">Provider</label>
   <select id="provider">
-    <option value="openrouter">OpenRouter (GPT-5.6 Luna, Gemini 3.1 Pro)</option>
+    <option value="openrouter">OpenRouter (8 models: GPT, DeepSeek, Gemini)</option>
     <option value="gemini">Google Gemini (direct)</option>
   </select>
 
@@ -25,11 +25,8 @@
     </p>
 
     <label for="openrouterModel">Model</label>
-    <select id="openrouterModel">
-      <option value="openai/gpt-5.6-luna">GPT-5.6 Luna (fast, cheap, recommended)</option>
-      <option value="google/gemini-3.1-pro-preview">Gemini 3.1 Pro (best Burmese, slower, pricier)</option>
-    </select>
-    <p class="hint">If the chosen model fails (not a key or credit problem), the other one answers automatically.</p>
+    <select id="openrouterModel"></select>
+    <p class="hint">Prices are US$ per million tokens (input / output). If the chosen model fails (not a key or credit problem), a backup model answers automatically and the page pill shows which one did. You can also switch models from the pill on any translated page; it re-translates the page with the model you pick.</p>
   </div>
 
   <div id="geminiSection" hidden>
@@ -66,6 +63,7 @@
   <p id="cacheStats" class="hint">…</p>
   <button id="clearCacheBtn" class="secondary">Clear cache</button>
 
+  <script src="openrouter.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

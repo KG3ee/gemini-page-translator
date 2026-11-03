@@ -211,6 +211,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (sender.tab?.id) chrome.tabs.sendMessage(sender.tab.id, { type: "set-showing", showing: msg.showing }).catch(() => {});
       sendResponse({ ok: true });
       return;
+    case "models-get":
+      // For the pill's picker: the OpenRouter list and the chosen model (none for direct Gemini).
+      getConfig().then((cfg) =>
+        sendResponse(cfg.provider === "openrouter" ? { provider: "openrouter", selected: cfg.model, models: orModelList() } : { provider: "gemini", models: [] }),
+      );
+      return true;
+    case "set-model": {
+      // Saved under the same key the settings page uses, then every frame of the
+      // tab re-translates with it (the cache is per model, so switching back is instant).
+      const model = orClampModel(msg.model);
+      const tabId = sender.tab?.id;
+      chrome.storage.local
+        .set({ openrouterModel: model })
+        .then(() => {
+          if (tabId) chrome.tabs.sendMessage(tabId, { type: "retranslate", model }).catch(() => {});
+          sendResponse({ ok: true, model });
+        })
+        .catch(() => sendResponse({ ok: false }));
+      return true;
+    }
     case "cache-stats":
       cacheStats().then(sendResponse);
       return true;
@@ -308,7 +328,7 @@ async function cacheKey(model, site, text) {
 // caller reverts what it applied and halves the batch.
 async function streamFragments(fragments, title, site, signal, post) {
   validateFragments(fragments);
-  if (!fragments.length) return { cached: 0, mismatch: false };
+  if (!fragments.length) return { cached: 0, mismatch: false, models: [] };
   const cfg = await getConfig();
   if (!cfg.key) throw fail(cfg.keyHint);
 
@@ -323,19 +343,22 @@ async function streamFragments(fragments, title, site, signal, post) {
   const allKeys = [...keysById.values()].flat();
   const hits = await chrome.storage.local.get(allKeys);
   const missing = [];
+  const answeredBy = new Set(); // slugs that produced this batch (cache hits count under the model that made them)
   let cached = 0;
   fragments.forEach((_, i) => {
     for (const id of lookupIds) {
       const t = hits[keysById.get(id)[i]]?.t;
       if (typeof t === "string" && t) {
         cached++;
+        answeredBy.add(id);
         post({ type: "partial", i, text: t });
         return;
       }
     }
     missing.push(i);
   });
-  if (!missing.length) return { cached, mismatch: false };
+  const models = () => [...answeredBy].map((id) => id.replace(/^openrouter:/, ""));
+  if (!missing.length) return { cached, mismatch: false, models: models() };
 
   // identical texts within the batch are sent once
   const groups = new Map(); // text -> [indices]
@@ -364,7 +387,8 @@ async function streamFragments(fragments, title, site, signal, post) {
     complete = await callGeminiStream(cfg.key, cfg.model, asked, cleanTitle, signal, onElement, onAttempt);
   }
   // fresh holds only the answering attempt's elements, so the count check is meaningful
-  if (!complete || fresh.length !== ask.length) return { cached, mismatch: true };
+  if (!complete || fresh.length !== ask.length) return { cached, mismatch: true, models: models() };
+  answeredBy.add(answeredId);
 
   const toStore = {};
   const now = Date.now();
@@ -378,7 +402,7 @@ async function streamFragments(fragments, title, site, signal, post) {
     chrome.storage.local.set(toStore).catch((err) => console.warn("cache write failed", err));
     noteWrites(n);
   }
-  return { cached, mismatch: false };
+  return { cached, mismatch: false, models: models() };
 }
 
 // ---- Gemini (SSE stream)

@@ -25,7 +25,8 @@ Only text near what you are looking at is sent: the screen you see plus one scre
 
 ## Providers
 
-- **OpenRouter (default).** One key, `https://openrouter.ai/api/v1/chat/completions`, streamed (`stream: true`). Models in settings: **GPT-5.6 Luna** (`openai/gpt-5.6-luna`, default, reasoning off) and **Gemini 3.1 Pro** (`google/gemini-3.1-pro-preview`, pinned to Google's standard Vertex endpoint, reasoning `low`, `service_tier: default`). Every request carries `provider: { data_collection: "deny", zdr: true }` (zero-data-retention endpoints only, no training on your text). If the chosen model fails with anything but a key or credit problem (HTTP 400/404/429/5xx, broken stream, empty answer), the other model answers automatically. 401/402/403 stop with a clear message instead, because the same key would fail again (bad key: paste a new one; credit used up: top up at openrouter.ai/settings/credits). No `HTTP-Referer`/`X-Title` headers are sent, so the tool does not show up on OpenRouter's public app lists.
+- **OpenRouter (default).** One key, `https://openrouter.ai/api/v1/chat/completions`, streamed (`stream: true`). Eight models (single list: `OR_MODELS` in `openrouter.js`, prices in the pickers): **GPT-5.6 Luna** (`openai/gpt-5.6-luna`, default), **GPT-6 Luna**, **DeepSeek V4 Pro** (`deepseek/deepseek-v4-pro-0813`), **Gemini 4 Argon**, **Gemini 3.1 Pro**, **Gemini 3.8 / 3.7 / 3.6 Flash**. Each gets the lowest reasoning setting it accepts (Luna and DeepSeek `none`; Gemini 4 Argon, 3.1 Pro, 3.8 and 3.7 Flash `low`; 3.6 Flash `minimal`); every Gemini is pinned to Google's standard Vertex endpoint (`google-vertex/global`, `service_tier: default`). Every request carries `provider: { data_collection: "deny", zdr: true }` (zero-data-retention endpoints only, no training on your text). If the chosen model fails with anything but a key or credit problem (HTTP 400/404/429/5xx, broken stream, empty answer), its backup answers automatically (Luna and DeepSeek -> Gemini 3.1 Pro; Gemini -> GPT-5.6 Luna). 401/402/403 stop with a clear message instead, because the same key would fail again (bad key: paste a new one; credit used up: top up at openrouter.ai/settings/credits). No `HTTP-Referer`/`X-Title` headers are sent, so the tool does not show up on OpenRouter's public app lists. Anthropic models are never offered (Burmese quality).
+- **Model picker in the pill.** On a translated page the pill has a model select (name + $ in/out per M tokens). Picking one saves it (same storage key as settings) and re-translates the page with it; the cache is per model, so going back is instant. The pill also says which model(s) produced the text on the page ("by GPT-5.6 Luna"); when it is not the picked one (the backup answered, or text came from another model's cache) it shows "fallback" in orange.
 - **Google Gemini (direct).** The original path, unchanged (`streamGenerateContent`, thinking `low`, safety filters off). Pick it in settings.
 - The model that actually answered decides the cache entry (`openrouter:<slug>`, or the Gemini model name); text already translated by the fallback is reused while the primary is down.
 
@@ -47,10 +48,12 @@ Only text near what you are looking at is sent: the screen you see plus one scre
 ```bash
 node --test test/openrouter.test.mjs                                  # SSE parser, request builder, stream reader (no network)
 (set -a; . ~/.config/openrouter.env; set +a; node test/e2e-openrouter.mjs [primary-slug])   # real OpenRouter call through background.js
+(set -a; . ~/.config/openrouter.env; set +a; node test/e2e-models.mjs <slug> [<slug> ...])  # one tiny real call per slug, fallback off
 ```
 
 ## Changelog
 
+- **1.9.0** — Eight OpenRouter models (adds GPT-6 Luna, DeepSeek V4 Pro, Gemini 4 Argon, Gemini 3.8 / 3.7 / 3.6 Flash) with prices in the settings dropdown. Model select in the in-page pill: pick a model and the page re-translates with it. The pill shows which model actually answered (and flags a fallback).
 - **1.8.0** — OpenRouter provider (default): GPT-5.6 Luna with automatic Gemini 3.1 Pro fallback, zero-data-retention routing on every request; direct Gemini kept as an option. New options page (provider, OpenRouter key, model). Cache keys include provider+model of the model that answered. Review fixes: a failed attempt's text is never mixed into a later answer or cached, a 403 (moderation) falls back to Gemini once, and only listed models are ever sent.
 - 1.7.3 — default shortcut `Alt+Shift+M`.
 

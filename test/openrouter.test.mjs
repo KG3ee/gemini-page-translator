@@ -260,3 +260,62 @@ test("model allow-list: a Haiku / inherited slug in storage is clamped to the de
   const w = worker({ openrouterModel: GEM });
   assert.deepEqual((await w.run(["gem"], [okStream(["Z"], GEM)])).models, [GEM]);
 });
+
+// ---- the 8-model picker (v1.9.0)
+
+const EIGHT = [
+  "openai/gpt-5.6-luna", "openai/gpt-6-luna", "deepseek/deepseek-v4-pro-0813", "google/gemini-4-argon",
+  "google/gemini-3.1-pro-preview", "google/gemini-3.8-flash", "google/gemini-3.7-flash", "google/gemini-3.6-flash",
+];
+
+test("orClampModel accepts exactly the 8 models; Anthropic and unknown slugs get the default", () => {
+  assert.deepEqual(Object.keys(or.OR_MODELS).sort(), [...EIGHT].sort());
+  for (const m of EIGHT) assert.equal(or.orClampModel(m), m);
+  for (const bad of ["anthropic/claude-haiku-4.5", "anthropic/claude-opus-5", "google/gemini-3.5-flash", "openai/gpt-7-luna", "deepseek/deepseek-v4-pro", "openai/gpt-6-luna ", "OPENAI/GPT-6-LUNA"]) {
+    assert.equal(or.orClampModel(bad), LUNA, bad);
+  }
+});
+
+test("every model has a defined fallback that is another listed model, never itself, never Anthropic", () => {
+  for (const m of EIGHT) {
+    const f = or.orFallbackFor(m);
+    assert.ok(f && f !== m && Object.hasOwn(or.OR_MODELS, f), `${m} -> ${f}`);
+    assert.ok(!/anthropic|claude|haiku/i.test(f));
+    assert.equal(or.OR_MODELS[m].fallback, f);
+  }
+  for (const m of ["openai/gpt-5.6-luna", "openai/gpt-6-luna", "deepseek/deepseek-v4-pro-0813"]) assert.equal(or.orFallbackFor(m), GEM);
+  for (const m of EIGHT.filter((x) => x.startsWith("google/"))) assert.equal(or.orFallbackFor(m), LUNA);
+});
+
+test("request shape per model: lowest reasoning, ZDR + no training always, Gemini pinned to Vertex", () => {
+  const effort = {
+    "openai/gpt-5.6-luna": "none", "openai/gpt-6-luna": "none", "deepseek/deepseek-v4-pro-0813": "none",
+    "google/gemini-4-argon": "low", "google/gemini-3.1-pro-preview": "low", "google/gemini-3.8-flash": "low",
+    "google/gemini-3.7-flash": "low", "google/gemini-3.6-flash": "minimal",
+  };
+  for (const m of EIGHT) {
+    const b = or.orBuildBody(m, []);
+    assert.equal(b.reasoning.effort, effort[m], m);
+    assert.equal(b.provider.zdr, true, m);
+    assert.equal(b.provider.data_collection, "deny", m);
+    if (m.startsWith("google/")) {
+      assert.deepEqual(b.provider.only, ["google-vertex/global"], m);
+      assert.equal(b.provider.allow_fallbacks, false, m);
+      assert.equal(b.service_tier, "default", m);
+    } else {
+      assert.equal(b.provider.only, undefined, m);
+      assert.equal(b.service_tier, undefined, m);
+    }
+  }
+});
+
+test("picker list: 8 entries with labels and prices (default first)", () => {
+  const list = or.orModelList();
+  assert.equal(list.length, 8);
+  assert.equal(list[0].id, LUNA);
+  assert.match(list.find((m) => m.id === "openai/gpt-6-luna").text, /\$0\.10 in \/ \$0\.50 out/);
+  assert.match(list.find((m) => m.id === "deepseek/deepseek-v4-pro-0813").text, /\$0\.115 in \/ \$4\.00 out/);
+  assert.match(list.find((m) => m.id === "google/gemini-3.8-flash").text, /\$0\.825 in \/ \$4\.13 out/);
+  assert.equal(or.orLabel("openrouter:google/gemini-4-argon"), "Gemini 4 Argon");
+  assert.equal(or.orLabel("gemini-3.8-flash"), "gemini-3.8-flash");
+});

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Gemini Page Translator",
-  "version": "1.8.0",
-  "description": "Translates the webpage you are reading into Burmese in place (right-click → Translate to Burmese) using your own OpenRouter key (GPT-5.6 Luna by default) or a Gemini API key. Code, commands, paths and URLs stay untouched.",
+  "version": "1.9.0",
+  "description": "Translates the webpage you are reading into Burmese in place (right-click → Translate to Burmese) using your own OpenRouter key (GPT-5.6 Luna by default, 8 models to pick from) or a Gemini API key. Code, commands, paths and URLs stay untouched.",
   "permissions": [
     "sidePanel",
     "storage",

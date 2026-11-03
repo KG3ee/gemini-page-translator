@@ -1,6 +1,7 @@
 const providerEl = document.getElementById("provider");
 const orKeyEl = document.getElementById("openrouterKey");
 const orModelEl = document.getElementById("openrouterModel");
+for (const m of orModelList()) orModelEl.add(new Option(m.text, m.id)); // single source: OR_MODELS in openrouter.js
 const apiKeyEl = document.getElementById("apiKey");
 const modelEl = document.getElementById("model");
 const savedMsg = document.getElementById("savedMsg");
@@ -16,7 +17,7 @@ providerEl.addEventListener("change", showProvider);
   const o = await chrome.storage.local.get(["provider", "openrouterKey", "openrouterModel", "apiKey", "model"]);
   providerEl.value = o.provider === "gemini" ? "gemini" : "openrouter"; // OpenRouter is the default
   if (o.openrouterKey) orKeyEl.value = o.openrouterKey;
-  if (o.openrouterModel) orModelEl.value = o.openrouterModel;
+  orModelEl.value = orClampModel(o.openrouterModel);
   if (o.apiKey) apiKeyEl.value = o.apiKey;
   if (o.model) modelEl.value = o.model;
   showProvider();

@@ -57,7 +57,11 @@
     fatal: null, notice: null, retryAt: 0, stopped: false, auto: false, autoNeedsGrant: false,
   };
   const pillPrefs = { corner: "br", collapsed: false }; // remembered across pages
-  let host, shadow, pillEl, msgEl, dotEl, toggleBtn, autoBtn, io, mo, observeTimer, observeDeadline = 0, retryTimer;
+  const picker = { provider: "", selected: "", models: [] }; // OpenRouter model list for the pill's select
+  const served = new Set();       // model slugs that produced the text on this page (may differ from the pick: fallback)
+  const ports = new Set();        // open translate ports, cut when the model is switched
+  let gen = 0;                    // bumped on a model switch; answers from an older generation are dropped
+  let host, shadow, pillEl, msgEl, byEl, modelEl, dotEl, toggleBtn, autoBtn, io, mo, observeTimer, observeDeadline = 0, retryTimer;
 
   // ---- what to translate
 
@@ -264,17 +268,21 @@
         return reject(/context invalidated/i.test(msg) ? wrap("The extension was reloaded — run Translate again.", false) : wrap(msg, true));
       }
       let settled = false;
+      ports.add(port);
       port.onMessage.addListener((m) => {
         if (m?.type === "partial") onPartial(m.i, m.text);
         else if (m?.type === "done") {
           settled = true;
+          ports.delete(port);
           resolve(m);
         } else if (m?.type === "error") {
           settled = true;
+          ports.delete(port);
           reject(wrap(m.error || "Translation failed.", !!m.retryable, m.retryAfter || 5000));
         }
       });
       port.onDisconnect.addListener(() => {
+        ports.delete(port);
         if (settled) return;
         const msg = chrome.runtime.lastError?.message || "The extension stopped responding.";
         reject(/context invalidated/i.test(msg) ? wrap("The extension was reloaded — run Translate again.", false) : wrap(msg, true));
@@ -305,9 +313,10 @@
   }
 
   // Length mismatch = the model merged or dropped a fragment; halve twice, then give up on those.
-  async function translateBatch(entries, depth = 0) {
+  async function translateBatch(entries, depth = 0, g = gen) {
     const applied = new Set();
     const apply = (i, text) => {
+      if (g !== gen) return; // the model was switched meanwhile
       const e = entries[i];
       const t = (text || "").trim();
       if (!e || !t) return;
@@ -322,15 +331,17 @@
     try {
       res = await request(entries.map((e) => e.core), apply);
     } catch (err) {
-      revert(applied);
+      if (g === gen) revert(applied);
       throw err;
     }
+    if (g !== gen) return; // switched while this was in flight: its text belongs to the old model
     state.cached += res.cached || 0;
+    if (!res.mismatch) for (const m of res.models || []) served.add(m);
     if (res.mismatch) {
       revert(applied);
       if (entries.length > 1 && depth < 2) {
         const mid = Math.ceil(entries.length / 2);
-        await Promise.all([translateBatch(entries.slice(0, mid), depth + 1), translateBatch(entries.slice(mid), depth + 1)]);
+        await Promise.all([translateBatch(entries.slice(0, mid), depth + 1, g), translateBatch(entries.slice(mid), depth + 1, g)]);
       } else {
         for (const e of entries) store.set(e.node, { orig: e.orig, my: e.orig }); // stays English, not resent
       }
@@ -350,8 +361,10 @@
       const chars = batch.reduce((n, e) => n + e.core.length, 0);
       state.active++;
       state.sentChars += chars;
-      translateBatch(batch)
+      const g = gen;
+      translateBatch(batch, 0, g)
         .catch((err) => {
+          if (g !== gen) return; // stale batch from before a model switch
           queue.unshift(...batch.map((e) => e.node)); // give the text back; nothing is lost
           state.sentChars -= chars;
           if (err?.retryable) {
@@ -402,7 +415,7 @@
         .pill { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 10px;
           background: #0f1a2b; color: #e7ecf3; border: 1px solid #26374f; border-radius: 999px;
           font: 13px/1.3 -apple-system, "Segoe UI", Roboto, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.35);
-          cursor: grab; user-select: none; touch-action: none; }
+          cursor: grab; user-select: none; touch-action: none; flex-wrap: wrap; max-width: calc(100vw - 32px); box-sizing: border-box; }
         .pill.dragging { cursor: grabbing; opacity: .85; }
         .grip { color: #93a2b8; font-size: 12px; letter-spacing: -3px; padding-right: 2px; }
         :host([data-collapsed]) .pill { width: 30px; height: 30px; padding: 0; justify-content: center; cursor: pointer; }
@@ -414,8 +427,13 @@
         .dot.idle { background: #93a2b8; }
         .dot.error { background: #f28b3b; }
         @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .35; transform: scale(.7);} }
-        .msg { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .msg { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         button { font: inherit; cursor: pointer; border-radius: 999px; }
+        .by { color: #f2a93b; font-size: 12px; white-space: nowrap; }
+        .by.fb { color: #f28b3b; font-weight: 600; }
+        .model { font: inherit; font-size: 12px; max-width: 200px; background: #0b1422; color: #e7ecf3; border: 1px solid #26374f; border-radius: 999px; padding: 3px 6px; cursor: pointer; }
+        .model:hover, .model:focus { border-color: #f2a93b; outline: none; }
+        .model option { background: #0f1a2b; color: #e7ecf3; }
         .toggle { background: transparent; color: #f2a93b; border: 1px solid #f2a93b; padding: 3px 10px; }
         .toggle:hover { background: #f2a93b; color: #241705; }
         .auto { background: transparent; color: #93a2b8; border: 1px solid #26374f; padding: 3px 10px; }
@@ -428,6 +446,8 @@
         <span class="grip">⋮⋮</span>
         <span class="dot"></span>
         <span class="msg"></span>
+        <span class="by" hidden></span>
+        <select class="model" title="Translation model: picking one re-translates this page with it" hidden></select>
         <button class="toggle"></button>
         <button class="auto"></button>
         <button class="min" title="Minimize to a dot (click the dot to expand)">–</button>
@@ -436,6 +456,9 @@
     pillEl = shadow.querySelector(".pill");
     dotEl = shadow.querySelector(".dot");
     msgEl = shadow.querySelector(".msg");
+    byEl = shadow.querySelector(".by");
+    modelEl = shadow.querySelector(".model");
+    modelEl.addEventListener("change", (e) => e.isTrusted && pickModel(modelEl.value));
     toggleBtn = shadow.querySelector(".toggle");
     autoBtn = shadow.querySelector(".auto");
     // only real clicks count: a page cannot toggle anything with synthetic events
@@ -456,7 +479,7 @@
     let suppressClick = false;
     pillEl.addEventListener("pointerdown", (e) => {
       if (!e.isTrusted || e.button !== 0) return;
-      if (e.target.closest("button") && !host.hasAttribute("data-collapsed")) return; // buttons keep their clicks
+      if (e.target.closest("button, select") && !host.hasAttribute("data-collapsed")) return; // buttons and the model select keep their clicks
       drag = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
       pillEl.setPointerCapture(e.pointerId);
     });
@@ -483,7 +506,7 @@
     pillEl.addEventListener("pointerup", end);
     pillEl.addEventListener("pointercancel", end);
     pillEl.addEventListener("click", (e) => {
-      if (!e.isTrusted || suppressClick || e.target.closest("button")) return; // buttons handle their own clicks
+      if (!e.isTrusted || suppressClick || e.target.closest("button, select")) return; // buttons handle their own clicks
       if (host.hasAttribute("data-collapsed")) setCollapsed(false);
     });
   }
@@ -557,6 +580,7 @@
     msgEl.title = text;
     pillEl.title = host.hasAttribute("data-collapsed") ? `${text} — click to expand, drag to move` : "Drag to another corner";
     dotEl.className = `dot ${kind}`;
+    renderModel(n);
     if (state.fatal && host.hasAttribute("data-collapsed")) setCollapsed(false); // errors must be seen
     toggleBtn.textContent = state.showing === "my" ? "Show original" : "Show Burmese";
     toggleBtn.hidden = n === 0;
@@ -571,6 +595,83 @@
         ? `Every page on ${SITE} translates as it loads. Click to turn that off.`
         : `Translate every page on ${SITE} automatically as it loads.`;
     }
+  }
+
+  // The select (OpenRouter only) and the "answered by" tag. The tag names the
+  // model(s) whose text is on the page; when that is not the picked one (the
+  // fallback answered, or text came from the cache of another model) it says so.
+  function renderModel(n) {
+    if (!modelEl) return;
+    const list = picker.provider === "openrouter" ? picker.models : [];
+    if (modelEl.options.length !== list.length) {
+      modelEl.replaceChildren(...list.map((m) => new Option(m.compact, m.id)));
+    }
+    modelEl.hidden = !list.length;
+    if (list.length) {
+      modelEl.value = picker.selected;
+      const cur = list.find((m) => m.id === picker.selected);
+      if (cur) modelEl.title = `${cur.text}. Picking another model re-translates this page with it.`;
+    }
+    const names = [...served].map((id) => list.find((m) => m.id === id)?.label || id);
+    const other = [...served].some((id) => id !== picker.selected);
+    byEl.hidden = !n || !names.length;
+    byEl.textContent = names.length ? `by ${names.join(" + ")}${other ? " · fallback" : ""}` : "";
+    byEl.className = other ? "by fb" : "by";
+    byEl.title = other ? `Not the model you picked (${picker.selected}): it failed or was unavailable, so the backup answered. Some text may be from the cache.` : "";
+  }
+
+  async function loadModels() {
+    if (!IS_TOP) return;
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "models-get" });
+      picker.provider = r?.provider || "";
+      picker.models = r?.models || [];
+      picker.selected = r?.selected || "";
+    } catch {}
+    render();
+  }
+
+  // The picker saves the choice (background, same storage key as settings) and
+  // every frame of the tab then gets "retranslate".
+  async function pickModel(model) {
+    if (model === picker.selected) return;
+    const before = picker.selected;
+    picker.selected = model;
+    render();
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "set-model", model });
+      if (!r?.ok) throw new Error("not saved");
+    } catch {
+      picker.selected = before;
+      render();
+    }
+  }
+
+  // Back to the original text, then translate again with whatever model is saved now.
+  function retranslate(model) {
+    if (model) picker.selected = model;
+    gen++;
+    for (const p of [...ports]) {
+      try {
+        p.disconnect();
+      } catch {}
+    }
+    ports.clear();
+    for (const [node, rec] of store) {
+      if (node.nodeValue === rec.my) node.nodeValue = rec.orig;
+      node.parentElement?.removeAttribute(MARK);
+      seen.delete(node);
+    }
+    store.clear();
+    queue.length = 0;
+    deferred.clear();
+    for (const el of pendingEls.keys()) io?.unobserve(el);
+    pendingEls.clear();
+    served.clear();
+    Object.assign(state, { translated: 0, cached: 0, sentChars: 0, fatal: null, notice: null, retryAt: 0, showing: "my" });
+    clearTimeout(retryTimer);
+    if (io) observeAll();
+    pump();
   }
 
   function setShowing(showing) {
@@ -618,6 +719,7 @@
 
   chrome.runtime.onMessage.addListener((m) => {
     if (m?.type === "set-showing" && !IS_TOP && (m.showing === "my" || m.showing === "orig")) setShowing(m.showing);
+    else if (m?.type === "retranslate" && !state.stopped) retranslate(typeof m.model === "string" ? m.model : "");
   });
 
   function run() {
@@ -637,6 +739,7 @@
     loadPillPrefs().then(ensurePill);
     ensurePill();
     readAuto();
+    loadModels();
     observeAll();
     pump();
   }
