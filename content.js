@@ -2,8 +2,10 @@
 // (context menu, shortcut, side panel button, or auto mode on a listed site).
 //
 // Only text near the viewport is sent: each candidate text node's parent is
-// watched by an IntersectionObserver with one screen of look-ahead, and nodes
-// are queued as their element comes near. Translations stream back over a
+// watched by an IntersectionObserver that reaches two screens ahead (half a
+// screen behind), so the next two scrolls are usually translated before you
+// get there; nodes are queued as their element comes near and sent nearest
+// first, in the direction you are scrolling. Translations stream back over a
 // port and are written as they arrive. A MutationObserver picks up text that
 // appears or changes later (next lesson in a single-page app, expanded
 // sections, live counters). Open shadow roots are walked and observed too.
@@ -37,12 +39,12 @@
     "[translate='no']", ".notranslate", "[contenteditable='']", "[contenteditable='true']", "[contenteditable='plaintext-only']",
     `#${HOST_ID}`,
   ].join(",");
-  const MAX_ITEMS = 60;         // fragments per request (look-ahead batches)
-  const MAX_CHARS = 5000;       // characters per request
+  const MAX_ITEMS = 30;         // fragments per request (look-ahead batches; small, so the nearest screen lands first)
+  const MAX_CHARS = 2500;       // characters per request
   const SCREEN_ITEMS = 12;      // a small first request paints the visible text fast
   const SCREEN_CHARS = 1200;
-  const CONCURRENCY = 2;
-  const LOOKAHEAD = "100% 0px 100% 0px"; // one screen above and below counts as "near"
+  const CONCURRENCY = 3;
+  const LOOKAHEAD = "50% 0px 200% 0px"; // two screens below and half a screen above count as "near": translate ~2 scrolls ahead of a reader going down
   const MAX_PAGE_CHARS = 300000; // per document; a runaway page cannot burn quota forever
   const SITE = location.hostname.replace(/^www\./, "");
 
@@ -227,11 +229,31 @@
     return { node, orig, lead: m[1], core, trail: m[3] };
   }
 
-  // On-screen text first (small batch, fast first paint), then the look-ahead.
+  // On-screen text first (small batch, fast first paint), then the look-ahead:
+  // text in the scroll direction nearest first, then text behind, nearest first.
+  // One rect read per node per call; the sort only compares cached numbers.
+  let scrollingUp = false;
+  let lastScrollY = scrollY;
+  addEventListener("scroll", () => {
+    if (scrollY !== lastScrollY) scrollingUp = scrollY < lastScrollY;
+    lastScrollY = scrollY;
+  }, { passive: true });
+
   function takeBatch() {
-    const prio = new Map(queue.map((n) => [n, inViewport(n) ? 0 : 1]));
-    queue.sort((a, b) => prio.get(a) - prio.get(b));
-    const onScreen = queue.length > 0 && prio.get(queue[0]) === 0;
+    const rank = new Map();
+    for (const n of queue) {
+      const r = n.isConnected && n.parentElement ? n.parentElement.getBoundingClientRect() : null;
+      let key = 3e9; // detached: last
+      if (r) {
+        const below = Math.max(r.top - innerHeight, 0), above = Math.max(-r.bottom, 0);
+        if (r.bottom > 0 && r.top < innerHeight) key = 0;
+        else if (r.top >= innerHeight) key = (scrollingUp ? 2e9 : 1e9) + below;
+        else key = (scrollingUp ? 1e9 : 2e9) + above;
+      }
+      rank.set(n, key);
+    }
+    queue.sort((a, b) => rank.get(a) - rank.get(b));
+    const onScreen = queue.length > 0 && rank.get(queue[0]) === 0;
     const maxItems = onScreen ? SCREEN_ITEMS : MAX_ITEMS;
     const maxChars = onScreen ? SCREEN_CHARS : MAX_CHARS;
     const batch = [];
@@ -242,7 +264,7 @@
         queue.shift();
         continue;
       }
-      if (onScreen && batch.length && prio.get(node) !== 0) break; // keep the fast batch on-screen only
+      if (onScreen && batch.length && rank.get(node) !== 0) break; // keep the fast batch on-screen only
       if (!isVisible(node)) {
         queue.shift();
         deferred.add(node);
