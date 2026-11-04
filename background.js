@@ -31,7 +31,25 @@ function installMenu() {
     });
   });
 }
-chrome.runtime.onInstalled.addListener(() => {
+// v1.9.1: the default model became Gemini 4 Argon. A model picked while testing
+// older builds is still in storage, so on the first update to this version set
+// openrouterModel once; the flag keeps later manual picks from being overwritten.
+const DEFAULT_MIGRATION_TARGET = "google/gemini-4-argon";
+async function migrateDefaultModel(details) {
+  if (!details) return;
+  if (details.reason === "install") {
+    // Fresh install: nothing to migrate, but mark it done so a later reload
+    // (reason "update") cannot overwrite a model the user picked meanwhile.
+    await chrome.storage.local.set({ defaultMigratedTo: DEFAULT_MIGRATION_TARGET });
+    return;
+  }
+  if (details.reason !== "update") return;
+  const { defaultMigratedTo } = await chrome.storage.local.get("defaultMigratedTo");
+  if (defaultMigratedTo === DEFAULT_MIGRATION_TARGET) return;
+  await chrome.storage.local.set({ openrouterModel: DEFAULT_MIGRATION_TARGET, defaultMigratedTo: DEFAULT_MIGRATION_TARGET });
+}
+chrome.runtime.onInstalled.addListener((details) => {
+  migrateDefaultModel(details).catch(() => {});
   installMenu();
   purgeLegacyCache().catch(() => {});
   dropAllSitesGrant().catch(() => {});

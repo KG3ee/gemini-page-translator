@@ -66,6 +66,7 @@ test("no Anthropic model anywhere in the list; fallback pairs", () => {
   }
   assert.equal(or.orFallbackFor("openai/gpt-5.6-luna"), "google/gemini-3.1-pro-preview");
   assert.equal(or.orFallbackFor("google/gemini-3.1-pro-preview"), "openai/gpt-5.6-luna");
+  assert.equal(or.orFallbackFor(ARGON), GEM);
   assert.equal(or.orFallbackFor("nope/nonexistent"), "google/gemini-3.1-pro-preview");
 });
 
@@ -122,6 +123,7 @@ test("orStream: HTTP errors, in-stream error, empty answer, truncated array", as
 const root = new URL("..", import.meta.url).pathname;
 const LUNA = "openai/gpt-5.6-luna";
 const GEM = "google/gemini-3.1-pro-preview";
+const ARGON = "google/gemini-4-argon";
 
 function worker(storeInit = {}) {
   const store = { provider: "openrouter", openrouterKey: "sk-or-FAKE", openrouterModel: LUNA, ...storeInit };
@@ -249,13 +251,14 @@ test("401/402 on Luna and 401 on the fallback still stop at once", async () => {
 });
 
 test("model allow-list: a Haiku / inherited slug in storage is clamped to the default", async () => {
-  assert.equal(or.orClampModel("anthropic/claude-haiku-4.5"), LUNA);
-  for (const bad of ["constructor", "__proto__", "toString", "", undefined, null, 7, {}]) assert.equal(or.orClampModel(bad), LUNA);
+  assert.equal(or.OR_DEFAULT_MODEL, ARGON);
+  assert.equal(or.orClampModel("anthropic/claude-haiku-4.5"), ARGON);
+  for (const bad of ["constructor", "__proto__", "toString", "", undefined, null, 7, {}]) assert.equal(or.orClampModel(bad), ARGON);
   assert.equal(or.orClampModel(GEM), GEM);
   for (const slug of ["anthropic/claude-haiku-4.5", "constructor"]) {
     const w = worker({ openrouterModel: slug });
-    const r = await w.run(["c" + slug], [okStream(["Z"], LUNA)]);
-    assert.deepEqual(r.models, [LUNA], slug);
+    const r = await w.run(["c" + slug], [okStream(["Z"], ARGON)]);
+    assert.deepEqual(r.models, [ARGON], slug);
   }
   const w = worker({ openrouterModel: GEM });
   assert.deepEqual((await w.run(["gem"], [okStream(["Z"], GEM)])).models, [GEM]);
@@ -272,7 +275,7 @@ test("orClampModel accepts exactly the 8 models; Anthropic and unknown slugs get
   assert.deepEqual(Object.keys(or.OR_MODELS).sort(), [...EIGHT].sort());
   for (const m of EIGHT) assert.equal(or.orClampModel(m), m);
   for (const bad of ["anthropic/claude-haiku-4.5", "anthropic/claude-opus-5", "google/gemini-3.5-flash", "openai/gpt-7-luna", "deepseek/deepseek-v4-pro", "openai/gpt-6-luna ", "OPENAI/GPT-6-LUNA"]) {
-    assert.equal(or.orClampModel(bad), LUNA, bad);
+    assert.equal(or.orClampModel(bad), ARGON, bad);
   }
 });
 
@@ -283,8 +286,8 @@ test("every model has a defined fallback that is another listed model, never its
     assert.ok(!/anthropic|claude|haiku/i.test(f));
     assert.equal(or.OR_MODELS[m].fallback, f);
   }
-  for (const m of ["openai/gpt-5.6-luna", "openai/gpt-6-luna", "deepseek/deepseek-v4-pro-0813"]) assert.equal(or.orFallbackFor(m), GEM);
-  for (const m of EIGHT.filter((x) => x.startsWith("google/"))) assert.equal(or.orFallbackFor(m), LUNA);
+  for (const m of ["openai/gpt-5.6-luna", "openai/gpt-6-luna", "deepseek/deepseek-v4-pro-0813", ARGON]) assert.equal(or.orFallbackFor(m), GEM);
+  for (const m of EIGHT.filter((x) => x.startsWith("google/") && x !== ARGON)) assert.equal(or.orFallbackFor(m), LUNA);
 });
 
 test("request shape per model: lowest reasoning, ZDR + no training always, Gemini pinned to Vertex", () => {
@@ -313,10 +316,76 @@ test("request shape per model: lowest reasoning, ZDR + no training always, Gemin
 test("picker list: 8 entries with labels and prices (default first)", () => {
   const list = or.orModelList();
   assert.equal(list.length, 8);
-  assert.equal(list[0].id, LUNA);
+  assert.equal(list[0].id, ARGON);
+  assert.match(list[0].text, /\(default\)/);
+  assert.doesNotMatch(list.find((m) => m.id === LUNA).text, /default/);
   assert.match(list.find((m) => m.id === "openai/gpt-6-luna").text, /\$0\.10 in \/ \$0\.50 out/);
   assert.match(list.find((m) => m.id === "deepseek/deepseek-v4-pro-0813").text, /\$1\.32 in \/ \$3\.96 out/);
   assert.match(list.find((m) => m.id === "google/gemini-3.8-flash").text, /\$0\.825 in \/ \$4\.13 out/);
   assert.equal(or.orLabel("openrouter:google/gemini-4-argon"), "Gemini 4 Argon");
   assert.equal(or.orLabel("gemini-3.8-flash"), "gemini-3.8-flash");
+});
+
+test("Argon failing (HTTP 500) is answered by Gemini 3.1 Pro", async () => {
+  const w = worker({ openrouterModel: ARGON });
+  const r = await w.run(["x"], [httpErr(500), httpErr(500), okStream(["Z"], GEM)]);
+  assert.deepEqual(r.models, [ARGON, ARGON, GEM]);
+});
+
+// ---- v1.9.1 one-time default-model migration (background.js onInstalled)
+
+function migrationWorker(storeInit) {
+  const store = { ...storeInit };
+  let listener;
+  const noop = () => {};
+  const ev = { addListener: noop };
+  const ctx = vm.createContext({
+    console: { log: noop, info: noop, warn: noop, error: noop },
+    TextEncoder, TextDecoder, crypto, Date, Math, Promise, setTimeout, setInterval: noop, clearInterval: noop,
+    chrome: {
+      storage: { local: {
+        get: async (k) => Object.fromEntries([].concat(k).filter((x) => x in store).map((x) => [x, store[x]])),
+        set: async (o) => Object.assign(store, o), remove: async () => {}, getBytesInUse: async () => 0,
+      }, onChanged: ev },
+      runtime: { onMessage: ev, onInstalled: { addListener: (f) => { listener = f; } }, onStartup: ev, onConnect: ev, getPlatformInfo: noop, id: "x", openOptionsPage: noop },
+      sidePanel: { setPanelBehavior: async () => {} }, contextMenus: { onClicked: ev, removeAll: noop, create: noop },
+      commands: { onCommand: ev }, tabs: { onUpdated: ev, query: async () => [] },
+      permissions: { remove: async () => {}, contains: async () => true, onRemoved: ev, getAll: async () => ({ origins: [] }) },
+      action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, onClicked: ev }, scripting: {}, alarms: { onAlarm: ev, create: noop },
+    },
+  });
+  ctx.importScripts = (...f) => { for (const x of f) vm.runInContext(fs.readFileSync(root + x, "utf8"), ctx, { filename: x }); };
+  vm.runInContext(fs.readFileSync(root + "background.js", "utf8"), ctx, { filename: "background.js" });
+  const fire = async (reason) => { listener({ reason }); await new Promise((r) => setTimeout(r, 20)); };
+  return { store, fire };
+}
+
+test("migration: update sets Argon once; a later manual pick sticks", async () => {
+  const m = migrationWorker({ openrouterModel: "openai/gpt-6-luna" });
+  await m.fire("update");
+  assert.equal(m.store.openrouterModel, ARGON);
+  assert.equal(m.store.defaultMigratedTo, ARGON);
+  m.store.openrouterModel = LUNA; // user picks Luna later
+  await m.fire("update");
+  assert.equal(m.store.openrouterModel, LUNA);
+});
+
+test("migration: fresh install and browser_update do not touch the model; a set flag blocks it", async () => {
+  const c = migrationWorker({ openrouterModel: LUNA });
+  await c.fire("chrome_update");
+  assert.equal(c.store.openrouterModel, LUNA);
+  assert.equal(c.store.defaultMigratedTo, undefined);
+  const m = migrationWorker({ openrouterModel: LUNA, defaultMigratedTo: ARGON });
+  await m.fire("update");
+  assert.equal(m.store.openrouterModel, LUNA);
+});
+
+test("migration: fresh install -> manual pick -> reload (update) keeps the pick", async () => {
+  const m = migrationWorker({});
+  await m.fire("install");
+  assert.equal(m.store.openrouterModel, undefined); // model untouched on install
+  assert.equal(m.store.defaultMigratedTo, ARGON);
+  m.store.openrouterModel = LUNA;
+  await m.fire("update");
+  assert.equal(m.store.openrouterModel, LUNA);
 });

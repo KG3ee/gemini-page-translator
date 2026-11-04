@@ -4,7 +4,7 @@
 // Every request asks for zero-data-retention endpoints that do not train on the
 // prompt. The model list is deliberately short; no Anthropic model (Burmese).
 const OR_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
-const OR_DEFAULT_MODEL = "openai/gpt-5.6-luna";
+const OR_DEFAULT_MODEL = "google/gemini-4-argon";
 
 // Per-model request shape. `reasoning` is the lowest setting the model accepts
 // (OpenRouter /models -> reasoning.supported_efforts, checked 2026-11-03):
@@ -15,9 +15,17 @@ const OR_DEFAULT_MODEL = "openai/gpt-5.6-luna";
 // US$ per million tokens, shown in the pickers. `label` is the short display name.
 const GEMINI_ROUTE = { order: ["google-vertex/global"], only: ["google-vertex/global"], allow_fallbacks: false };
 const OR_MODELS = {
+  "google/gemini-4-argon": {
+    label: "Gemini 4 Argon",
+    note: "default",
+    price: [2.0, 10.0],
+    reasoning: { effort: "low" },
+    route: GEMINI_ROUTE,
+    serviceTier: "default",
+    fallback: "google/gemini-3.1-pro-preview",
+  },
   "openai/gpt-5.6-luna": {
     label: "GPT-5.6 Luna",
-    note: "default",
     price: [0.2, 1.2],
     reasoning: { effort: "none" },
     fallback: "google/gemini-3.1-pro-preview",
@@ -38,14 +46,6 @@ const OR_MODELS = {
     // only hosts that declare fp8 or better (no fp4, no undeclared "unknown" hosts)
     route: { quantizations: ["fp8", "fp16", "bf16", "fp32"] },
     fallback: "google/gemini-3.1-pro-preview",
-  },
-  "google/gemini-4-argon": {
-    label: "Gemini 4 Argon",
-    price: [2.0, 10.0],
-    reasoning: { effort: "low" },
-    route: GEMINI_ROUTE,
-    serviceTier: "default",
-    fallback: "openai/gpt-5.6-luna",
   },
   "google/gemini-3.1-pro-preview": {
     label: "Gemini 3.1 Pro",
