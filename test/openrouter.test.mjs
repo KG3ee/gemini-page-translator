@@ -152,7 +152,7 @@ function worker(storeInit = {}) {
     },
   });
   ctx.importScripts = (...f) => { for (const x of f) vm.runInContext(fs.readFileSync(root + x, "utf8"), ctx, { filename: x }); };
-  vm.runInContext(fs.readFileSync(root + "background.js", "utf8") + "\n;globalThis.__sf = streamFragments; globalThis.__stamps = stamps;", ctx, { filename: "background.js" });
+  vm.runInContext(fs.readFileSync(root + "background.js", "utf8") + "\n;globalThis.__sf = streamFragments; globalThis.__stamps = stamps; globalThis.__rl = rateLimit;", ctx, { filename: "background.js" });
 
   const w = { store, calls: [], script: [] };
   ctx.fetch = async (url, init) => {
@@ -171,6 +171,8 @@ function worker(storeInit = {}) {
     try { result = await ctx.__sf(fragments, "T", site, undefined, (m) => parts.push(m)); } catch (e) { error = e; }
     return { result, error, parts, models: w.calls.map((c) => c.body.model), left: w.script.length };
   };
+  w.rl = (signal, onScreen) => ctx.__rl(signal, onScreen);
+  w.stamps = ctx.__stamps;
   w.cached = () => Object.entries(store).filter(([k]) => k.startsWith("t:")).map(([, v]) => v.t);
   return w;
 }
@@ -388,4 +390,17 @@ test("migration: fresh install -> manual pick -> reload (update) keeps the pick"
   m.store.openrouterModel = LUNA;
   await m.fire("update");
   assert.equal(m.store.openrouterModel, LUNA);
+});
+
+test("rateLimit: on-screen requests skip the wait; a request cancelled while waiting takes no slot", async () => {
+  const w = worker();
+  for (let i = 0; i < 40; i++) w.stamps.push(Date.now()); // window full
+  await w.rl(undefined, true); // on-screen goes straight through (and counts)
+  assert.equal(w.stamps.length, 41);
+  const ac = new AbortController();
+  const waiting = w.rl(ac.signal, false).then(() => "sent", (e) => e.message);
+  await new Promise((r) => setTimeout(r, 20));
+  ac.abort();
+  assert.equal(await waiting, "Cancelled.");
+  assert.equal(w.stamps.length, 41);
 });

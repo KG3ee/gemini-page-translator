@@ -19,7 +19,7 @@ After editing any file, click **Reload** on `chrome://extensions`.
 
 Translations stream in: each fragment appears the moment the model finishes it, so a long batch fills in progressively instead of landing all at once. Text inside web components (open shadow roots) and same-origin frames is covered; the pill lives in the top frame and its toggle applies to the frames too.
 
-Only text near what you are looking at is sent: the screen you see plus two screens ahead (and half a screen behind), nearest first in the direction you scroll, so the next scroll is usually already translated when you get there. As you scroll, the next part goes out, so a long page you only skim costs almost nothing. Text that appears later (next lesson in a single-page app, an expanded section) is picked up automatically.
+Only text near what you are looking at is sent: the screen you see plus two screens ahead (and half a screen behind), nearest first in the direction you scroll, so the next scroll is usually already translated when you get there. As you scroll, the next part goes out, so a long page you only skim costs almost nothing. The two-screen look-ahead follows normal page scrolling; inside an inner scroll box (a chat pane, a code panel) the text nearest the view is still sent first, but less is fetched ahead. Text that appears later (next lesson in a single-page app, an expanded section) is picked up automatically.
 
 **Side panel (fallback).** Click the toolbar icon → **Translate in this panel instead** to get the translation next to the untouched page.
 
