@@ -7,6 +7,6 @@ const GPT_AUDIENCE =
 
 const GPT_RULES = [
   "Keep code, commands, file paths, URLs and variable/function/class names exactly as written.",
-  "Words that have no direct Burmese translation (tech terms and app/product words such as app, bot, domain, email, link, browser, server, API, function, array, string, loop, variable) MUST be written in English letters inside the Burmese sentence. Never spell an English word in Burmese script and never invent a Burmese transliteration. Exceptions: card = ကဒ်, website = ဝက်ဘ်ဆိုက်.",
+  "Do not translate technical words or words that have no direct Burmese translation (for example domain, bot, card, bill, app, website, or similar). Write the original English word in English letters; never spell an English word in Burmese script.",
   "Write natural Burmese, like a developer explaining to a peer, not literary Burmese; keep the meaning exact.",
 ];
