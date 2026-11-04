@@ -54,6 +54,7 @@ node --test test/openrouter.test.mjs                                  # SSE pars
 
 ## Changelog
 
+- **1.9.2** — Prompt rule is now hard: words with no direct Burmese translation (app, bot, domain, email, link, browser, server, API...) are always written in English letters, never spelled in Burmese script.
 - **1.9.1** — Default model is now Gemini 4 Argon (fallback Gemini 3.1 Pro). One-time migration on update sets the stored model to Argon once; later picks stick.
 - **1.9.0** — Eight OpenRouter models (adds GPT-6 Luna, DeepSeek V4 Pro, Gemini 4 Argon, Gemini 3.8 / 3.7 / 3.6 Flash) with prices in the settings dropdown. Model select in the in-page pill: pick a model and the page re-translates with it. The pill shows which model actually answered (and flags a fallback). Follow-up fixes: a switch now cancels in-flight requests cleanly and re-collects below-the-fold text; a model change made in another tab or in settings re-translates every live page; the select commits after a 600 ms pause; DeepSeek V4 Pro skips fp4-quantized hosts (`quantizations` filter, ZDR kept).
 - **1.8.0** — OpenRouter provider (default): GPT-5.6 Luna with automatic Gemini 3.1 Pro fallback, zero-data-retention routing on every request; direct Gemini kept as an option. New options page (provider, OpenRouter key, model). Cache keys include provider+model of the model that answered. Review fixes: a failed attempt's text is never mixed into a later answer or cached, a 403 (moderation) falls back to Gemini once, and only listed models are ever sent.

@@ -7,7 +7,6 @@ const GPT_AUDIENCE =
 
 const GPT_RULES = [
   "Keep code, commands, file paths, URLs and variable/function/class names exactly as written.",
-  "Programming terms Myanmar developers keep in English (function, array, API, server, string, loop, variable) may stay English inside the Burmese sentence.",
-  "Never transliterate technical terms into Burmese script.",
+  "Words that have no direct Burmese translation (tech terms and app/product words such as app, bot, domain, email, link, browser, server, API, function, array, string, loop, variable) MUST be written in English letters inside the Burmese sentence. Never spell an English word in Burmese script and never invent a Burmese transliteration.",
   "Write natural Burmese, like a developer explaining to a peer, not literary Burmese; keep the meaning exact.",
 ];
