@@ -280,7 +280,7 @@ chrome.runtime.onConnect.addListener((port) => {
   };
   port.onMessage.addListener((msg) => {
     if (msg?.type !== "translate") return;
-    streamFragments(msg.fragments, msg.title, site, controller.signal, post)
+    streamFragments(msg.fragments, msg.title, site, controller.signal, post, msg.onScreen === true)
       .then((r) => post({ type: "done", ...r }))
       .catch((err) => post({ type: "error", error: err?.message || String(err), retryable: !!err?.retryable, retryAfter: err?.retryAfter || 0 }))
       .finally(() => {
@@ -339,7 +339,7 @@ async function cacheKey(model, site, text) {
 // Posts { type: "partial", i, text } for cache hits at once and for each Gemini
 // element as it streams in; resolves { cached, mismatch }. On mismatch the
 // caller reverts what it applied and halves the batch.
-async function streamFragments(fragments, title, site, signal, post) {
+async function streamFragments(fragments, title, site, signal, post, onScreen = false) {
   validateFragments(fragments);
   if (!fragments.length) return { cached: 0, mismatch: false, models: [] };
   const cfg = await getConfig();
@@ -393,11 +393,11 @@ async function streamFragments(fragments, title, site, signal, post) {
   let complete;
   let answeredId = cfg.cacheId; // cache under the model that actually answered
   if (cfg.provider === "openrouter") {
-    const r = await callOpenRouterStream(cfg, asked, cleanTitle, signal, onElement, onAttempt);
+    const r = await callOpenRouterStream(cfg, asked, cleanTitle, signal, onElement, onAttempt, onScreen);
     complete = r.complete;
     answeredId = orCacheId(r.model);
   } else {
-    complete = await callGeminiStream(cfg.key, cfg.model, asked, cleanTitle, signal, onElement, onAttempt);
+    complete = await callGeminiStream(cfg.key, cfg.model, asked, cleanTitle, signal, onElement, onAttempt, onScreen);
   }
   // fresh holds only the answering attempt's elements, so the count check is meaningful
   if (!complete || fresh.length !== ask.length) return { cached, mismatch: true, models: models() };
@@ -435,11 +435,15 @@ function releaseWorker() {
 }
 
 const stamps = [];
-async function rateLimit() {
+// On-screen requests (what the reader is looking at) never wait for a slot; they still
+// count in the window, so look-ahead requests wait for them. A cancelled request leaves
+// without taking a slot.
+async function rateLimit(signal, onScreen = false) {
   for (;;) {
+    if (signal?.aborted) throw fail("Cancelled.");
     const now = Date.now();
     while (stamps.length && now - stamps[0] > 60000) stamps.shift();
-    if (stamps.length < RATE_LIMIT_PER_MIN) {
+    if (onScreen || stamps.length < RATE_LIMIT_PER_MIN) {
       stamps.push(now);
       return;
     }
@@ -463,7 +467,7 @@ function retryDelayFrom(data) {
 // (also what moderation returns) falls back once; a 403 from the fallback stops.
 // onAttempt() runs before every request so the caller can drop a failed attempt's elements.
 // Resolves { complete, model } with the model that actually answered.
-async function callOpenRouterStream(cfg, fragments, title, signal, onElement, onAttempt) {
+async function callOpenRouterStream(cfg, fragments, title, signal, onElement, onAttempt, onScreen = false) {
   const messages = [
     { role: "system", content: FRAGMENT_SYSTEM_PROMPT },
     { role: "user", content: `Page title: ${title || "(untitled)"}\n\nFragments (JSON array of ${fragments.length}):\n${JSON.stringify(fragments)}` },
@@ -478,7 +482,7 @@ async function callOpenRouterStream(cfg, fragments, title, signal, onElement, on
       let err = null;
       for (let attempt = 0; attempt < tries; attempt++) {
         if (signal?.aborted) throw fail("Cancelled.");
-        await rateLimit();
+        await rateLimit(signal, onScreen);
         try {
           onAttempt();
           const r = await orStream({ apiKey: cfg.key, model, messages, signal, onElement });
@@ -505,7 +509,7 @@ async function callOpenRouterStream(cfg, fragments, title, signal, onElement, on
 // Resolves true when the array closed cleanly (all elements delivered through
 // onElement), false when the answer was blocked, truncated or not an array.
 // onAttempt() runs before every request (see callOpenRouterStream).
-async function callGeminiStream(apiKey, model, fragments, title, signal, onElement, onAttempt) {
+async function callGeminiStream(apiKey, model, fragments, title, signal, onElement, onAttempt, onScreen = false) {
   const url = `${GEMINI_ENDPOINT}${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
   const body = {
     system_instruction: { parts: [{ text: FRAGMENT_SYSTEM_PROMPT }] },
@@ -530,7 +534,7 @@ async function callGeminiStream(apiKey, model, fragments, title, signal, onEleme
   try {
     for (let attempt = 0; attempt < 4; attempt++) {
       if (signal?.aborted) throw fail("Cancelled.");
-      await rateLimit();
+      await rateLimit(signal, onScreen);
       let res;
       try {
         res = await fetch(url, {

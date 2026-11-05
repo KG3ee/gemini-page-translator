@@ -2,8 +2,10 @@
 // (context menu, shortcut, side panel button, or auto mode on a listed site).
 //
 // Only text near the viewport is sent: each candidate text node's parent is
-// watched by an IntersectionObserver with one screen of look-ahead, and nodes
-// are queued as their element comes near. Translations stream back over a
+// watched by an IntersectionObserver that reaches two screens ahead (half a
+// screen behind), so the next two scrolls are usually translated before you
+// get there; nodes are queued as their element comes near and sent nearest
+// first, in the direction you are scrolling. Translations stream back over a
 // port and are written as they arrive. A MutationObserver picks up text that
 // appears or changes later (next lesson in a single-page app, expanded
 // sections, live counters). Open shadow roots are walked and observed too.
@@ -37,12 +39,14 @@
     "[translate='no']", ".notranslate", "[contenteditable='']", "[contenteditable='true']", "[contenteditable='plaintext-only']",
     `#${HOST_ID}`,
   ].join(",");
-  const MAX_ITEMS = 60;         // fragments per request (look-ahead batches)
-  const MAX_CHARS = 5000;       // characters per request
+  const MAX_ITEMS = 30;         // fragments per request (look-ahead batches; small, so the nearest screen lands first)
+  const MAX_CHARS = 2500;       // characters per request
   const SCREEN_ITEMS = 12;      // a small first request paints the visible text fast
   const SCREEN_CHARS = 1200;
-  const CONCURRENCY = 2;
-  const LOOKAHEAD = "100% 0px 100% 0px"; // one screen above and below counts as "near"
+  const CONCURRENCY = 3;        // requests in flight; one slot is always kept free for on-screen text
+  const SMALL_BATCH = 800;      // a look-ahead batch under this many chars waits (up to COALESCE_MS) to grow
+  const COALESCE_MS = 250;
+  const LOOKAHEAD = "50% 0px 200% 0px"; // two screens below and half a screen above count as "near": translate ~2 scrolls ahead of a reader going down
   const MAX_PAGE_CHARS = 300000; // per document; a runaway page cannot burn quota forever
   const SITE = location.hostname.replace(/^www\./, "");
 
@@ -212,11 +216,6 @@
 
   // ---- batching
 
-  function inViewport(node) {
-    const r = node.parentElement?.getBoundingClientRect();
-    return !!r && r.bottom > 0 && r.top < innerHeight;
-  }
-
   function toEntry(node) {
     const orig = node.nodeValue;
     // leading punctuation (". Just make sure", ", otherwise") is peeled off like
@@ -227,11 +226,34 @@
     return { node, orig, lead: m[1], core, trail: m[3] };
   }
 
-  // On-screen text first (small batch, fast first paint), then the look-ahead.
-  function takeBatch() {
-    const prio = new Map(queue.map((n) => [n, inViewport(n) ? 0 : 1]));
-    queue.sort((a, b) => prio.get(a) - prio.get(b));
-    const onScreen = queue.length > 0 && prio.get(queue[0]) === 0;
+  // On-screen text first (small batch, fast first paint), then the look-ahead:
+  // text in the scroll direction nearest first, then text behind, nearest first.
+  // One rect read per node per call; the sort only compares cached numbers.
+  let scrollingUp = false;
+  let lastScrollY = scrollY;
+  addEventListener("scroll", () => {
+    if (scrollY !== lastScrollY) scrollingUp = scrollY < lastScrollY;
+    lastScrollY = scrollY;
+  }, { passive: true });
+
+  // look = a look-ahead batch may start now (a slot beyond the reserved one is free);
+  // small = small look-ahead batches may go out instead of waiting to grow.
+  function takeBatch(look, small) {
+    const rank = new Map();
+    for (const n of queue) {
+      const r = n.isConnected && n.parentElement ? n.parentElement.getBoundingClientRect() : null;
+      let key = 3e9; // detached: last
+      if (r) {
+        const below = Math.max(r.top - innerHeight, 0), above = Math.max(-r.bottom, 0);
+        if (r.bottom > 0 && r.top < innerHeight) key = 0;
+        else if (r.top >= innerHeight) key = (scrollingUp ? 2e9 : 1e9) + below;
+        else key = (scrollingUp ? 1e9 : 2e9) + above;
+      }
+      rank.set(n, key);
+    }
+    queue.sort((a, b) => rank.get(a) - rank.get(b));
+    const onScreen = queue.length > 0 && rank.get(queue[0]) === 0;
+    if (!onScreen && !look) return [];
     const maxItems = onScreen ? SCREEN_ITEMS : MAX_ITEMS;
     const maxChars = onScreen ? SCREEN_CHARS : MAX_CHARS;
     const batch = [];
@@ -242,7 +264,7 @@
         queue.shift();
         continue;
       }
-      if (onScreen && batch.length && prio.get(node) !== 0) break; // keep the fast batch on-screen only
+      if (onScreen && batch.length && rank.get(node) !== 0) break; // keep the fast batch on-screen only
       if (!isVisible(node)) {
         queue.shift();
         deferred.add(node);
@@ -254,11 +276,16 @@
       batch.push(e);
       chars += e.core.length;
     }
+    if (!onScreen && !small && state.active > 0 && chars < SMALL_BATCH) {
+      queue.unshift(...batch.map((e) => e.node)); // too small to be worth a request while others are in flight
+      return [];
+    }
+    batch.onScreen = onScreen;
     return batch;
   }
 
   // One port per batch; partial results arrive as the model produces them.
-  function request(fragments, onPartial) {
+  function request(fragments, onPartial, onScreen = false) {
     return new Promise((resolve, reject) => {
       const wrap = (message, retryable, retryAfter = 5000) => Object.assign(new Error(message), { retryable, retryAfter });
       let port;
@@ -297,7 +324,7 @@
         const msg = chrome.runtime.lastError?.message || "The extension stopped responding.";
         reject(/context invalidated/i.test(msg) ? wrap("The extension was reloaded — run Translate again.", false) : wrap(msg, true));
       });
-      port.postMessage({ type: "translate", fragments, title: document.title });
+      port.postMessage({ type: "translate", fragments, title: document.title, onScreen });
     });
   }
 
@@ -323,7 +350,7 @@
   }
 
   // Length mismatch = the model merged or dropped a fragment; halve twice, then give up on those.
-  async function translateBatch(entries, depth = 0, g = gen) {
+  async function translateBatch(entries, depth = 0, g = gen, onScreen = false) {
     const applied = new Set();
     const apply = (i, text) => {
       if (g !== gen) return; // the model was switched meanwhile
@@ -339,7 +366,7 @@
     };
     let res;
     try {
-      res = await request(entries.map((e) => e.core), apply);
+      res = await request(entries.map((e) => e.core), apply, onScreen);
     } catch (err) {
       if (g === gen) revert(applied);
       throw err;
@@ -351,7 +378,7 @@
       revert(applied);
       if (entries.length > 1 && depth < 2) {
         const mid = Math.ceil(entries.length / 2);
-        await Promise.all([translateBatch(entries.slice(0, mid), depth + 1, g), translateBatch(entries.slice(mid), depth + 1, g)]);
+        await Promise.all([translateBatch(entries.slice(0, mid), depth + 1, g, onScreen), translateBatch(entries.slice(mid), depth + 1, g, onScreen)]);
       } else {
         for (const e of entries) store.set(e.node, { orig: e.orig, my: e.orig }); // stays English, not resent
       }
@@ -360,19 +387,31 @@
     for (const e of entries) if (!applied.has(e) && !store.has(e.node)) store.set(e.node, { orig: e.orig, my: e.orig }); // empty answer: leave it
   }
 
-  function pump() {
+  let lookActive = 0;     // look-ahead requests in flight
+  let coalesceTimer = null;
+  function pump(small = false) {
     if (state.stopped || state.showing !== "my" || state.fatal || Date.now() < state.retryAt) {
       render();
       return;
     }
     while (state.active < CONCURRENCY && queue.length && state.sentChars < MAX_PAGE_CHARS) {
-      const batch = takeBatch();
-      if (!batch.length) break;
+      const batch = takeBatch(lookActive < CONCURRENCY - 1, small);
+      if (!batch.length) {
+        if (queue.length && !small && state.active && !coalesceTimer) {
+          coalesceTimer = setTimeout(() => {
+            coalesceTimer = null;
+            pump(true);
+          }, COALESCE_MS);
+        }
+        break;
+      }
+      const look = !batch.onScreen;
+      if (look) lookActive++;
       const chars = batch.reduce((n, e) => n + e.core.length, 0);
       state.active++;
       state.sentChars += chars;
       const g = gen;
-      translateBatch(batch, 0, g)
+      translateBatch(batch, 0, g, batch.onScreen)
         .catch((err) => {
           if (g !== gen) return; // stale batch from before a model switch
           queue.unshift(...batch.map((e) => e.node)); // give the text back; nothing is lost
@@ -391,6 +430,7 @@
         })
         .finally(() => {
           state.active--;
+          if (look) lookActive--;
           pump();
         });
     }
@@ -582,7 +622,7 @@
     } else if (state.retryAt > Date.now()) {
       text = `The model is busy — retrying in ${Math.ceil((state.retryAt - Date.now()) / 1000)} s`;
       kind = "busy";
-    } else if (state.active || queue.length) {
+    } else if (state.active || (queue.length && state.sentChars < MAX_PAGE_CHARS)) {
       text = `Translating… ${count} so far`;
       kind = "busy";
     } else if (state.sentChars >= MAX_PAGE_CHARS) {
